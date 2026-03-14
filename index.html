@@ -529,73 +529,73 @@ function App() {
         </nav>
       </header>
 
-      <main style={{maxWidth:600,margin:"0 auto",padding:"28px 18px",display:"flex",flexDirection:"column",gap:18}}>
+      <main style={{maxWidth:1200,margin:"0 auto",padding:"28px 24px",display:"flex",flexDirection:"column",gap:18}}>
 
         {view==="dashboard"&&(
           <div style={{display:"flex",flexDirection:"column",gap:18}} className="fi">
-            {/* KPIs */}
-            <div style={C.g2}>
+
+            {/* Row 1 — 4 KPIs */}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:14}}>
               <KPI label="P&L Acumulado" value={m?fmtFull(m.totalPnl):"—"} sub={m?`${m.totalDays} sesiones`:"Sin datos"} color={m?.totalPnl>=0?"var(--green)":"var(--red)"}/>
               <KPI label="Win Rate" value={m?`${m.wr.toFixed(1)}%`:"—"} sub={m?`${m.wins}W · ${m.losses}L`:"Objetivo ≥65%"} color={!m?"var(--muted)":m.wr>=65?"var(--green)":"var(--yellow)"}/>
               <KPI label="Profit Factor" value={m?.pf?m.pf.toFixed(2):"—"} sub="Objetivo > 1.5" color={!m?.pf?"var(--muted)":m.pf>=1.5?"var(--green)":m.pf>=1?"var(--yellow)":"var(--red)"}/>
               <KPI label="Max Drawdown" value={m?fmtShort(-m.maxDD):"—"} sub="Desde pico de equity" color="var(--indigo)"/>
             </div>
 
-            {/* R/R */}
-            {m?.rrRatio&&(
+            {/* Row 2 — Equity curve + Days grid side by side */}
+            <div style={{display:"grid",gridTemplateColumns:"1.4fr 1fr",gap:14}}>
               <div style={C.card}>
-                <div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}>
-                  <span style={C.lbl}>Ratio R/R promedio</span>
-                  <span style={{fontSize:20,fontWeight:700,color:m.rrRatio>=1.5?"var(--green)":m.rrRatio>=1?"var(--yellow)":"var(--red)"}}>{m.rrRatio.toFixed(2)} : 1</span>
-                </div>
-                <div style={{display:"flex",gap:20,fontSize:13,color:"var(--muted)"}}>
-                  <span>Avg win <span style={{color:"var(--green)"}}>{fmtShort(m.avgWin)}</span></span>
-                  <span>Avg loss <span style={{color:"var(--red)"}}>{fmtShort(-m.avgLoss)}</span></span>
-                </div>
+                <span style={C.lbl}>Curva de equity</span>
+                <EquityCurve data={m?.equityCurve}/>
               </div>
-            )}
-
-            {/* Equity curve */}
-            <div style={C.card}>
-              <span style={C.lbl}>Curva de equity</span>
-              <EquityCurve data={m?.equityCurve}/>
+              <DaysGrid sessions={sessions}/>
             </div>
 
-            {/* Days grid */}
-            <DaysGrid sessions={sessions}/>
-
-            {/* Contratos mensual */}
-            <ContratosBar
-              actual={m?.contratosThisMonth||0}
-              objetivo={OBJ_MENSUAL}
-              label={`Contratos este mes (${m?.currentMonth||new Date().toISOString().slice(0,7)})`}
-              sub={`Objetivo mensual: ${OBJ_MENSUAL.toLocaleString()} contratos`}
-            />
-
-            {/* Contratos semanal */}
-            <WeeklyContratos actual={m?.contratosThisWeek||0}/>
-
-            {/* Month grid */}
-            <MonthGrid months={m?.months} count={m?.greenMonthsCount||1}/>
-
-            {/* Reglas */}
-            <div style={C.card}>
-              <span style={C.lbl}>Reglas · No negociables</span>
-              <div style={{display:"flex",flexDirection:"column",gap:10}}>
-                {[
-                  {k:"Alerta",v:"−$20.000",c:"var(--yellow)"},
-                  {k:"Cierre total",v:"−$40.000",c:"var(--red)"},
-                  {k:"Corte anticipado",v:"65 contratos / +$20.000",c:"var(--green)"},
-                  {k:"Horario",v:"10:30 → 13:00",c:"var(--indigo)"},
-                  {k:"Objetivo diario",v:"+$10.000",c:"var(--green)"},
-                ].map(r=>(
-                  <div key={r.k} style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                    <span style={{fontSize:13,color:"var(--muted)"}}>{r.k}</span>
-                    <span style={{fontSize:13,fontWeight:700,color:r.c}}>{r.v}</span>
-                  </div>
-                ))}
+            {/* Row 3 — Contratos mensual + semanal + R/R */}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:14}}>
+              <ContratosBar
+                actual={m?.contratosThisMonth||0}
+                objetivo={OBJ_MENSUAL}
+                label={`Contratos mes (${m?.currentMonth||new Date().toISOString().slice(0,7)})`}
+                sub={`Objetivo: ${OBJ_MENSUAL.toLocaleString()} contratos`}
+              />
+              <WeeklyContratos actual={m?.contratosThisWeek||0}/>
+              <div style={C.card}>
+                <span style={C.lbl}>Ratio R/R promedio</span>
+                {m?.rrRatio ? (
+                  <>
+                    <div style={{fontSize:28,fontWeight:700,color:m.rrRatio>=1.5?"var(--green)":m.rrRatio>=1?"var(--yellow)":"var(--red)",marginBottom:10}}>{m.rrRatio.toFixed(2)} <span style={{fontSize:14,fontWeight:400,color:"var(--muted)"}}>: 1</span></div>
+                    <div style={{display:"flex",flexDirection:"column",gap:6,fontSize:13,color:"var(--muted)"}}>
+                      <span>Avg win <span style={{color:"var(--green)"}}>{fmtShort(m.avgWin)}</span></span>
+                      <span>Avg loss <span style={{color:"var(--red)"}}>{fmtShort(-m.avgLoss)}</span></span>
+                    </div>
+                  </>
+                ) : <div style={{fontSize:13,color:"var(--faint)",marginTop:8}}>Sin datos suficientes</div>}
               </div>
             </div>
+
+            {/* Row 4 — Month grid + Reglas */}
+            <div style={{display:"grid",gridTemplateColumns:"1.6fr 1fr",gap:14}}>
+              <MonthGrid months={m?.months} count={m?.greenMonthsCount||1}/>
+              <div style={C.card}>
+                <span style={C.lbl}>Reglas · No negociables</span>
+                <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                  {[
+                    {k:"Alerta",v:"−$20.000",c:"var(--yellow)"},
+                    {k:"Cierre total",v:"−$40.000",c:"var(--red)"},
+                    {k:"Corte anticipado",v:"65c / +$20k",c:"var(--green)"},
+                    {k:"Horario",v:"10:30 → 13:00",c:"var(--indigo)"},
+                    {k:"Objetivo diario",v:"+$10.000",c:"var(--green)"},
+                  ].map(r=>(
+                    <div key={r.k} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:"1px solid var(--border)"}}>
+                      <span style={{fontSize:12,color:"var(--muted)"}}>{r.k}</span>
+                      <span style={{fontSize:13,fontWeight:700,color:r.c}}>{r.v}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
           </div>
         )}
 
