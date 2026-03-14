@@ -108,8 +108,9 @@ function calcMetrics(sessions) {
     if(!months[mo]) months[mo]={pnl:0,sessions:0,wins:0,ops:0,contratos:0};
     months[mo].pnl+=s.pnl; months[mo].sessions++;
     months[mo].wins+=s.pnl>0?1:0;
-    months[mo].ops+=(s.opsWin||0)+(s.opsLoss||0);
-    months[mo].contratos+=(s.opsWin||0)+(s.opsLoss||0);
+    const c=s.contratos||(s.opsWin||0)+(s.opsLoss||0);
+    months[mo].ops+=c;
+    months[mo].contratos+=c;
   });
 
   // Weekly contratos
@@ -117,7 +118,7 @@ function calcMetrics(sessions) {
   daily.forEach(s=>{
     const wk=getWeekYear(s.date);
     if(!weeks[wk]) weeks[wk]=0;
-    weeks[wk]+=(s.opsWin||0)+(s.opsLoss||0);
+    weeks[wk]+=(s.contratos||(s.opsWin||0)+(s.opsLoss||0));
   });
 
   // Current month contratos
@@ -321,34 +322,42 @@ function SessionCard({s,onDelete}) {
 }
 
 // ── New Session ───────────────────────────────────────────────────────────────
-const emptyForm={date:new Date().toISOString().split("T")[0],opsWin:"",opsLoss:"",grossWin:"",grossLoss:"",pnl:"",drawdown:"",obs:""};
+const emptyForm={date:new Date().toISOString().split("T")[0],contratos:"",opsWin:"",opsLoss:"",grossWin:"",grossLoss:"",pnl:"",drawdown:"",obs:""};
 
 function NewSession({onSave}) {
   const [f,setF]=useState(emptyForm),[saved,setSaved]=useState(false);
-  const set=k=>e=>setF(p=>({...p,[k]:e.target.value}));
+  const set=k=>e=>{
+    const v=e.target.value;
+    // allow digits, minus, dot only for numeric fields
+    if(k!=="date"&&k!=="obs"&&!/^-?[0-9]*\.?[0-9]*$/.test(v)&&v!=="") return;
+    setF(p=>({...p,[k]:v}));
+  };
+  const contratos=parseInt(f.contratos)||((parseInt(f.opsWin)||0)+(parseInt(f.opsLoss)||0));
   const ops=(parseInt(f.opsWin)||0)+(parseInt(f.opsLoss)||0);
   const wr=ops>0?((parseInt(f.opsWin)/ops)*100).toFixed(1):null;
   const pf=parseFloat(f.grossLoss)>0?(parseFloat(f.grossWin)/parseFloat(f.grossLoss)).toFixed(2):null;
-  const rules=getRules(parseFloat(f.pnl)||0,ops);
+  const rules=getRules(parseFloat(f.pnl)||0,contratos);
   const save=()=>{
     if(!f.date||!f.pnl) return;
-    onSave({...f,id:Date.now(),type:"daily",pnl:parseFloat(f.pnl)||0,opsWin:parseInt(f.opsWin)||0,opsLoss:parseInt(f.opsLoss)||0,grossWin:parseFloat(f.grossWin)||0,grossLoss:parseFloat(f.grossLoss)||0,drawdown:parseFloat(f.drawdown)||0});
+    const totalContratos=parseInt(f.contratos)||((parseInt(f.opsWin)||0)+(parseInt(f.opsLoss)||0));
+    onSave({...f,id:Date.now(),type:"daily",pnl:parseFloat(f.pnl)||0,opsWin:parseInt(f.opsWin)||0,opsLoss:parseInt(f.opsLoss)||0,contratos:totalContratos,grossWin:parseFloat(f.grossWin)||0,grossLoss:parseFloat(f.grossLoss)||0,drawdown:parseFloat(f.drawdown)||0});
     setF({...emptyForm,date:new Date().toISOString().split("T")[0]});
     setSaved(true); setTimeout(()=>setSaved(false),2000);
   };
   const fi=e=>e.target.style.borderColor="var(--indigo)";
   const bl=e=>e.target.style.borderColor="var(--border)";
-  const Field=({label,name,type="number",placeholder})=>(
-    <div><label style={C.lbl}>{label}</label><input type={type} value={f[name]} onChange={set(name)} placeholder={placeholder} style={C.inp} onFocus={fi} onBlur={bl}/></div>
+  const Field=({label,name,placeholder,type="text"})=>(
+    <div><label style={C.lbl}>{label}</label><input type={type} value={f[name]} onChange={set(name)} placeholder={placeholder} style={C.inp} onFocus={fi} onBlur={bl} inputMode={name==="date"?"text":"decimal"}/></div>
   );
   return (
     <div style={{...C.card,display:"flex",flexDirection:"column",gap:16}} className="fi">
       <span style={{...C.lbl,marginBottom:0}}>Nueva sesión · GGAL/ABR26</span>
       <Field label="📅 Fecha" name="date" type="date"/>
+      <Field label="📊 Total contratos operados" name="contratos" placeholder="175"/>
       <div style={C.g2}><Field label="✅ Ops ganadoras" name="opsWin" placeholder="0"/><Field label="❌ Ops perdedoras" name="opsLoss" placeholder="0"/></div>
       <div style={C.g2}><Field label="💹 Ganancia bruta $" name="grossWin" placeholder="0"/><Field label="💸 Pérdida bruta $" name="grossLoss" placeholder="0"/></div>
       <div style={C.g2}><Field label="💰 P&L neto $" name="pnl" placeholder="+ o −"/><Field label="📉 Drawdown máx $" name="drawdown" placeholder="0"/></div>
-      <div><label style={C.lbl}>🧠 Observación</label><textarea value={f.obs} onChange={set("obs")} rows={3} placeholder="¿Respetaste el plan? ¿Qué pasó? ¿Qué aprendiste?" style={{...C.inp,resize:"none",lineHeight:1.6}} onFocus={fi} onBlur={bl}/></div>
+      <div><label style={C.lbl}>🧠 Observación</label><textarea value={f.obs} onChange={e=>setF(p=>({...p,obs:e.target.value}))} rows={3} placeholder="¿Respetaste el plan? ¿Qué pasó? ¿Qué aprendiste?" style={{...C.inp,resize:"none",lineHeight:1.6}} onFocus={fi} onBlur={bl}/></div>
       {(wr||pf||rules.length>0)&&(
         <div style={{background:"#1c1c1e",border:"1px solid var(--border)",borderRadius:10,padding:14}}>
           <span style={{...C.lbl,marginBottom:10}}>Preview</span>
