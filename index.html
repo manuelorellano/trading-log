@@ -291,12 +291,74 @@ function MonthGrid({months,count}) {
   );
 }
 
-function SessionCard({s,onDelete}) {
+function SessionCard({s,onDelete,onEdit}) {
   const [hov,setHov]=useState(false);
+  const [editing,setEditing]=useState(false);
+  const refs={
+    date:useRef(),contratos:useRef(),opsWin:useRef(),opsLoss:useRef(),
+    grossWin:useRef(),grossLoss:useRef(),pnl:useRef(),drawdown:useRef(),obs:useRef()
+  };
   const isPos=s.pnl>=0, ops=(s.opsWin||0)+(s.opsLoss||0);
   const wr=ops>0?((s.opsWin/ops)*100).toFixed(0):null;
   const pf=s.grossLoss>0?(s.grossWin/s.grossLoss).toFixed(2):null;
   const rules=getRules(s.pnl,ops);
+
+  const saveEdit=()=>{
+    const pnlVal=parseFloat(refs.pnl.current.value)||0;
+    const opsWin=parseInt(refs.opsWin.current.value)||0;
+    const opsLoss=parseInt(refs.opsLoss.current.value)||0;
+    const contratos=parseInt(refs.contratos.current.value)||(opsWin+opsLoss);
+    onEdit({
+      ...s,
+      date:refs.date.current.value||s.date,
+      pnl:pnlVal, contratos, opsWin, opsLoss,
+      grossWin:parseFloat(refs.grossWin.current.value)||0,
+      grossLoss:parseFloat(refs.grossLoss.current.value)||0,
+      drawdown:parseFloat(refs.drawdown.current.value)||0,
+      obs:refs.obs.current.value||"",
+    });
+    setEditing(false);
+  };
+
+  const fi=e=>e.target.style.borderColor="var(--indigo)";
+  const bl=e=>e.target.style.borderColor="var(--border)";
+  const EField=({label,refKey,defaultVal,type="text"})=>(
+    <div>
+      <label style={{...C.lbl,fontSize:9}}>{label}</label>
+      <input ref={refs[refKey]} type={type} defaultValue={defaultVal} style={{...C.inp,padding:"8px 10px",fontSize:13}} onFocus={fi} onBlur={bl} autoComplete="off"/>
+    </div>
+  );
+
+  if(editing) return (
+    <div style={{...C.card,borderColor:"var(--indigo)",background:"#0f0f14"}} className="fi">
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+        <span style={{fontSize:11,color:"var(--indigo)",fontWeight:700,letterSpacing:"0.1em"}}>EDITANDO SESIÓN</span>
+        <button onClick={()=>setEditing(false)} style={{background:"none",border:"none",color:"var(--muted)",cursor:"pointer",fontSize:12}}>Cancelar</button>
+      </div>
+      <div style={{display:"flex",flexDirection:"column",gap:12}}>
+        <EField label="📅 Fecha" refKey="date" defaultVal={s.date} type="date"/>
+        <EField label="📊 Contratos" refKey="contratos" defaultVal={s.contratos||ops}/>
+        <div style={C.g2}>
+          <EField label="✅ Ops ganadoras" refKey="opsWin" defaultVal={s.opsWin||""}/>
+          <EField label="❌ Ops perdedoras" refKey="opsLoss" defaultVal={s.opsLoss||""}/>
+        </div>
+        <div style={C.g2}>
+          <EField label="💹 Ganancia bruta $" refKey="grossWin" defaultVal={s.grossWin||""}/>
+          <EField label="💸 Pérdida bruta $" refKey="grossLoss" defaultVal={s.grossLoss||""}/>
+        </div>
+        <div style={C.g2}>
+          <EField label="💰 P&L neto $" refKey="pnl" defaultVal={s.pnl||""}/>
+          <EField label="📉 Drawdown máx $" refKey="drawdown" defaultVal={s.drawdown||""}/>
+        </div>
+        <div>
+          <label style={{...C.lbl,fontSize:9}}>🧠 Observación</label>
+          <textarea ref={refs.obs} defaultValue={s.obs||""} rows={3} style={{...C.inp,resize:"none",lineHeight:1.6,fontSize:13}} onFocus={fi} onBlur={bl}/>
+        </div>
+        <button onClick={saveEdit} style={{...C.btn,background:"var(--indigo)",color:"white"}}>GUARDAR CAMBIOS</button>
+      </div>
+    </div>
+  );
+
   return (
     <div style={{...C.card,borderColor:hov?"var(--border-hover)":"var(--border)",transition:"border-color 0.15s"}} onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)} className="fi">
       <div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}>
@@ -304,7 +366,12 @@ function SessionCard({s,onDelete}) {
           <span style={{fontSize:12,color:"var(--muted)"}}>{s.date}</span>
           <span style={{fontSize:18,fontWeight:700,color:isPos?"var(--green)":"var(--red)"}}>{fmtFull(s.pnl)}</span>
         </div>
-        {hov&&<button onClick={()=>onDelete(s.id)} style={{background:"none",border:"none",color:"var(--faint)",cursor:"pointer",fontSize:13}} onMouseEnter={e=>e.target.style.color="var(--red)"} onMouseLeave={e=>e.target.style.color="var(--faint)"}>✕</button>}
+        {hov&&(
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={()=>setEditing(true)} style={{background:"none",border:"none",color:"var(--muted)",cursor:"pointer",fontSize:12}} onMouseEnter={e=>e.target.style.color="var(--indigo)"} onMouseLeave={e=>e.target.style.color="var(--muted)"}>✏️</button>
+            <button onClick={()=>onDelete(s.id)} style={{background:"none",border:"none",color:"var(--faint)",cursor:"pointer",fontSize:12}} onMouseEnter={e=>e.target.style.color="var(--red)"} onMouseLeave={e=>e.target.style.color="var(--faint)"}>✕</button>
+          </div>
+        )}
       </div>
       <div style={{height:3,background:"var(--border)",borderRadius:2,overflow:"hidden",marginBottom:12,position:"relative"}}>
         <div style={{position:"absolute",top:0,left:"50%",width:1,height:"100%",background:"var(--faint)"}}/>
@@ -572,6 +639,7 @@ function App() {
   const addSession=s=>setSessions(p=>[s,...p]);
   const deleteSession=id=>{ if(id==="feb-2026") return; setSessions(p=>p.filter(s=>s.id!==id)); };
   const importSessions=data=>setSessions(data);
+  const editSession=s=>setSessions(p=>p.map(x=>x.id===s.id?s:x));
   const m=useMemo(()=>calcMetrics(sessions),[sessions]);
   const daily=sessions.filter(s=>s.type==="daily").sort((a,b)=>b.date.localeCompare(a.date));
   const TABS=[
@@ -685,7 +753,7 @@ function App() {
                 <button onClick={()=>setView("nueva")} style={{...C.btn,width:"auto",padding:"10px 24px",background:"var(--indigo)",color:"white"}}>Cargar primera sesión →</button>
               </div>
             )}
-            {daily.map(s=><SessionCard key={s.id} s={s} onDelete={deleteSession}/>)}
+            {daily.map(s=><SessionCard key={s.id} s={s} onDelete={deleteSession} onEdit={editSession}/>)}
           </div>
         )}
 
