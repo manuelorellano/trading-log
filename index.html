@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Trading Log · GGAL/ABR26</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.5.0/Recharts.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.21.4/babel.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #09090b;
+    --surface: #111113;
+    --border: #27272a;
+    --border-hover: #3f3f46;
+    --text: #e4e4e7;
+    --muted: #71717a;
+    --faint: #3f3f46;
+    --indigo: #6366f1;
+    --indigo-dark: #4338ca;
+    --green: #4ade80;
+    --green-bg: #052e16;
+    --green-border: #166534;
+    --red: #f87171;
+    --red-bg: #450a0a;
+    --red-border: #991b1b;
+    --yellow: #fbbf24;
+    --yellow-bg: #451a03;
+  }
+  html, body { background: var(--bg); color: var(--text); font-family: 'JetBrains Mono', monospace; min-height: 100vh; }
+  #root { min-height: 100vh; }
+  input, textarea, button { font-family: inherit; }
+  ::-webkit-scrollbar { width: 4px; } 
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; }
+  input:focus, textarea:focus { outline: none; }
+
+  /* Animations */
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  .fade-in { animation: fadeIn 0.2s ease forwards; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useMemo, useEffect } = React;
+const { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } = Recharts;
+
+const STORAGE_KEY = "trading_log_v1";
+
+const FEB_REF = { id: "feb-2025", date: "2025-02", type: "monthly", pnl: 1, note: "Mes rentable — sin detalle diario" };
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+function fmtFull(n) {
+  const abs = Math.abs(n).toLocaleString("es-AR");
+  return (n >= 0 ? "+" : "−") + "$" + abs;
+}
+function fmtShort(n) {
+  const abs = Math.abs(n);
+  const sign = n >= 0 ? "+" : "−";
+  if (abs >= 1000000) return sign + "$" + (abs/1000000).toFixed(1) + "M";
+  if (abs >= 1000) return sign + "$" + (abs/1000).toFixed(1) + "k";
+  return sign + "$" + abs;
+}
+
+function calcMetrics(sessions) {
+  const daily = sessions.filter(s => s.type === "daily");
+  if (!daily.length) return null;
+  const sorted = [...daily].sort((a,b) => a.date.localeCompare(b.date));
+  const totalPnl = daily.reduce((a,s) => a + s.pnl, 0);
+  const wins = daily.filter(s => s.pnl > 0).length;
+  const losses = daily.filter(s => s.pnl <= 0).length;
+  const wr = (wins / daily.length) * 100;
+  const grossWin = daily.reduce((a,s) => a + (s.grossWin||0), 0);
+  const grossLoss = daily.reduce((a,s) => a + (s.grossLoss||0), 0);
+  const pf = grossLoss > 0 ? grossWin / grossLoss : null;
+  const avgWin = wins > 0 ? grossWin / wins : 0;
+  const avgLoss = losses > 0 ? grossLoss / losses : 0;
+  const rrRatio = avgLoss > 0 ? avgWin / avgLoss : null;
+
+  let equity = 0, peak = 0, maxDD = 0;
+  const equityCurve = sorted.map(s => {
+    equity += s.pnl;
+    if (equity > peak) peak = equity;
+    const dd = peak - equity;
+    if (dd > maxDD) maxDD = dd;
+    return { date: s.date.slice(5), equity, pnl: s.pnl };
+  });
+
+  const months = {};
+  daily.forEach(s => {
+    const mo = s.date.slice(0,7);
+    if (!months[mo]) months[mo] = { pnl:0, sessions:0, wins:0, ops:0 };
+    months[mo].pnl += s.pnl;
+    months[mo].sessions++;
+    months[mo].wins += s.pnl > 0 ? 1 : 0;
+    months[mo].ops += (s.opsWin||0) + (s.opsLoss||0);
+  });
+
+  const greenMonthsCount = 1 + Object.values(months).filter(m => m.pnl > 0).length;
+  return { totalPnl, wins, losses, wr, pf, avgWin, avgLoss, rrRatio, maxDD, equityCurve, months, totalDays: daily.length, greenMonthsCount };
+}
+
+function getRules(pnl, ops) {
+  const flags = [];
+  if (pnl <= -40000) flags.push({ type:"danger", msg:"⛔ Cierre total −$40k" });
+  else if (pnl <= -20000) flags.push({ type:"warn", msg:"⚠️ Alerta −$20k" });
+  if (pnl >= 20000) flags.push({ type:"ok", msg:"✂️ Corte +$20k" });
+  if (ops >= 65) flags.push({ type:"ok", msg:"✂️ Corte 65 contratos" });
+  return flags;
+}
+
+// ── Styles ───────────────────────────────────────────────────────────────────
+const S = {
+  page: { minHeight:"100vh", background:"var(--bg)", fontFamily:"'JetBrains Mono', monospace" },
+  header: { borderBottom:"1px solid var(--border)", padding:"12px 20px", display:"flex", alignItems:"center", justifyContent:"space-between", position:"sticky", top:0, background:"rgba(9,9,11,0.95)", backdropFilter:"blur(12px)", zIndex:20 },
+  main: { maxWidth:560, margin:"0 auto", padding:"24px 16px", display:"flex", flexDirection:"column", gap:16 },
+  card: { borderRadius:12, border:"1px solid var(--border)", background:"var(--surface)", padding:16 },
+  cardHover: { borderRadius:12, border:"1px solid var(--border)", background:"var(--surface)", padding:16, cursor:"default", transition:"border-color 0.15s" },
+  label: { fontSize:10, fontFamily:"monospace", textTransform:"uppercase", letterSpacing:"0.18em", color:"var(--muted)", marginBottom:6, display:"block" },
+  input: { width:"100%", background:"#1c1c1e", border:"1px solid var(--border)", borderRadius:8, padding:"10px 12px", fontSize:13, color:"var(--text)", fontFamily:"monospace", transition:"border-color 0.15s" },
+  btn: { width:"100%", padding:"12px", borderRadius:10, border:"none", fontSize:13, fontWeight:700, letterSpacing:"0.1em", cursor:"pointer", fontFamily:"monospace", transition:"background 0.15s" },
+  grid2: { display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 },
+};
+
+// ── Components ────────────────────────────────────────────────────────────────
+function Chip({ type, msg }) {
+  const styles = {
+    danger: { background:"var(--red-bg)", color:"var(--red)", border:"1px solid var(--red-border)" },
+    warn: { background:"var(--yellow-bg)", color:"var(--yellow)", border:"1px solid #92400e" },
+    ok: { background:"var(--green-bg)", color:"var(--green)", border:"1px solid var(--green-border)" },
+  };
+  return <span style={{ ...styles[type], fontSize:11, padding:"2px 8px", borderRadius:4, fontFamily:"monospace" }}>{msg}</span>;
+}
+
+function KPI({ label, value, sub, color }) {
+  return (
+    <div style={{ ...S.card, position:"relative", overflow:"hidden" }}>
+      <div style={{ position:"absolute", top:0, left:0, right:0, height:1, background:`linear-gradient(90deg, transparent, ${color}, transparent)` }} />
+      <span style={S.label}>{label}</span>
+      <div style={{ fontSize:22, fontWeight:700, color, fontVariantNumeric:"tabular-nums" }}>{value}</div>
+      {sub && <div style={{ fontSize:11, color:"var(--muted)", marginTop:2 }}>{sub}</div>}
+    </div>
+  );
+}
+
+function CustomTooltip({ active, payload, label }) {
+  if (!active || !payload?.length) return null;
+  const d = payload[0]?.payload;
+  return (
+    <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:8, padding:"8px 12px", fontSize:11, fontFamily:"monospace" }}>
+      <div style={{ color:"var(--muted)", marginBottom:4 }}>{label}</div>
+      <div style={{ color: (d?.equity||0) >= 0 ? "var(--green)" : "var(--red)" }}>Equity: {fmtShort(d?.equity||0)}</div>
+      <div style={{ color:"var(--muted)" }}>Sesión: {fmtShort(d?.pnl||0)}</div>
+    </div>
+  );
+}
+
+function EquityCurve({ data }) {
+  if (!data?.length) return (
+    <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:130, color:"var(--faint)", fontSize:12 }}>
+      Sin datos aún — registrá tu primera sesión
+    </div>
+  );
+  const last = data[data.length-1]?.equity || 0;
+  const color = last >= 0 ? "#4ade80" : "#f87171";
+  return (
+    <ResponsiveContainer width="100%" height={130}>
+      <AreaChart data={data} margin={{ top:4, right:4, bottom:0, left:0 }}>
+        <defs>
+          <linearGradient id="eq" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="5%" stopColor={color} stopOpacity={0.2}/>
+            <stop offset="95%" stopColor={color} stopOpacity={0}/>
+          </linearGradient>
+        </defs>
+        <ReferenceLine y={0} stroke="var(--border)" strokeDasharray="3 3"/>
+        <XAxis dataKey="date" tick={{ fontSize:9, fill:"var(--muted)", fontFamily:"monospace" }} axisLine={false} tickLine={false}/>
+        <YAxis hide/>
+        <Tooltip content={<CustomTooltip/>}/>
+        <Area type="monotone" dataKey="equity" stroke={color} strokeWidth={2} fill="url(#eq)" dot={false}/>
+      </AreaChart>
+    </ResponsiveContainer>
+  );
+}
+
+function MonthGrid({ months, greenMonthsCount }) {
+  return (
+    <div style={S.card}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
+        <span style={S.label}>Meses en verde 2025</span>
+        <span style={{ fontSize:13, fontWeight:700, color:"var(--indigo)" }}>{greenMonthsCount} / 12</span>
+      </div>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(12,1fr)", gap:4 }}>
+        {["E","F","M","A","M","J","J","A","S","O","N","D"].map((lbl, i) => {
+          const key = `2025-${String(i+1).padStart(2,"0")}`;
+          const data = months?.[key];
+          const isFeb = i === 1;
+          let bg = "var(--border)", tc = "var(--faint)";
+          if (isFeb) { bg = "var(--green-bg)"; tc = "var(--green)"; }
+          else if (data) { bg = data.pnl > 0 ? "var(--green-bg)" : "var(--red-bg)"; tc = data.pnl > 0 ? "var(--green)" : "var(--red)"; }
+          return (
+            <div key={lbl} style={{ background:bg, borderRadius:4, padding:"6px 0", textAlign:"center" }}>
+              <span style={{ fontSize:10, fontWeight:700, color:tc }}>{lbl}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function SessionCard({ s, onDelete }) {
+  const [hovered, setHovered] = useState(false);
+  const isPos = s.pnl >= 0;
+  const ops = (s.opsWin||0) + (s.opsLoss||0);
+  const wr = ops > 0 ? ((s.opsWin/ops)*100).toFixed(0) : null;
+  const pf = s.grossLoss > 0 ? (s.grossWin/s.grossLoss).toFixed(2) : null;
+  const rules = getRules(s.pnl, ops);
+
+  return (
+    <div
+      style={{ ...S.cardHover, borderColor: hovered ? "var(--border-hover)" : "var(--border)" }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      className="fade-in"
+    >
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:8 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+          <span style={{ fontSize:11, color:"var(--muted)" }}>{s.date}</span>
+          <span style={{ fontSize:16, fontWeight:700, color: isPos ? "var(--green)" : "var(--red)" }}>{fmtFull(s.pnl)}</span>
+        </div>
+        {hovered && (
+          <button onClick={() => onDelete(s.id)} style={{ background:"none", border:"none", color:"var(--faint)", cursor:"pointer", fontSize:12, padding:"0 4px" }}
+            onMouseEnter={e => e.target.style.color="var(--red)"}
+            onMouseLeave={e => e.target.style.color="var(--faint)"}>✕</button>
+        )}
+      </div>
+
+      {/* P&L bar */}
+      <div style={{ height:3, background:"var(--border)", borderRadius:2, overflow:"hidden", marginBottom:10, position:"relative" }}>
+        <div style={{ position:"absolute", top:0, left:"50%", width:1, height:"100%", background:"var(--faint)" }}/>
+        <div style={{
+          position:"absolute", top:0, height:"100%", borderRadius:2,
+          background: isPos ? "var(--green)" : "var(--red)",
+          left: isPos ? "50%" : `${Math.max(0, 50 - Math.min(49, Math.abs(s.pnl)/1000))}%`,
+          width: `${Math.min(49, Math.abs(s.pnl)/1000)}%`
+        }}/>
+      </div>
+
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:8, marginBottom: rules.length||s.obs ? 10 : 0 }}>
+        {[
+          { label:"OPS", value: ops||"—", color:"var(--text)" },
+          { label:"WR", value: wr ? wr+"%" : "—", color: wr >= 65 ? "var(--green)" : wr ? "var(--yellow)" : "var(--muted)" },
+          { label:"PF", value: pf||"—", color: pf >= 1.5 ? "var(--green)" : pf >= 1 ? "var(--yellow)" : pf ? "var(--red)" : "var(--muted)" },
+          { label:"DD", value: s.drawdown ? fmtShort(-s.drawdown) : "—", color:"var(--text)" },
+        ].map(c => (
+          <div key={c.label}>
+            <div style={{ fontSize:10, color:"var(--muted)", marginBottom:2 }}>{c.label}</div>
+            <div style={{ fontSize:12, fontWeight:700, color:c.color }}>{c.value}</div>
+          </div>
+        ))}
+      </div>
+
+      {rules.length > 0 && <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom: s.obs ? 8 : 0 }}>{rules.map((r,i) => <Chip key={i} {...r}/>)}</div>}
+      {s.obs && <p style={{ fontSize:11, color:"var(--muted)", fontStyle:"italic", borderLeft:"2px solid var(--border)", paddingLeft:8, lineHeight:1.6, margin:0 }}>{s.obs}</p>}
+    </div>
+  );
+}
+
+// ── New Session Form ──────────────────────────────────────────────────────────
+const emptyForm = { date: new Date().toISOString().split("T")[0], opsWin:"", opsLoss:"", grossWin:"", grossLoss:"", pnl:"", drawdown:"", obs:"" };
+
+function NewSession({ onSave }) {
+  const [f, setF] = useState(emptyForm);
+  const [saved, setSaved] = useState(false);
+  const set = k => e => setF(p => ({ ...p, [k]: e.target.value }));
+
+  const ops = (parseInt(f.opsWin)||0) + (parseInt(f.opsLoss)||0);
+  const wr = ops > 0 ? ((parseInt(f.opsWin)/ops)*100).toFixed(1) : null;
+  const pf = parseFloat(f.grossLoss) > 0 ? (parseFloat(f.grossWin)/parseFloat(f.grossLoss)).toFixed(2) : null;
+  const rules = getRules(parseFloat(f.pnl)||0, ops);
+
+  const save = () => {
+    if (!f.date || !f.pnl) return;
+    onSave({ ...f, id: Date.now(), type:"daily", pnl: parseFloat(f.pnl)||0, opsWin: parseInt(f.opsWin)||0, opsLoss: parseInt(f.opsLoss)||0, grossWin: parseFloat(f.grossWin)||0, grossLoss: parseFloat(f.grossLoss)||0, drawdown: parseFloat(f.drawdown)||0 });
+    setF({ ...emptyForm, date: new Date().toISOString().split("T")[0] });
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  };
+
+  const focusInput = e => e.target.style.borderColor = "var(--indigo)";
+  const blurInput = e => e.target.style.borderColor = "var(--border)";
+
+  const Field = ({ label, name, type="number", placeholder, full }) => (
+    <div style={ full ? {} : {} }>
+      <label style={S.label}>{label}</label>
+      <input type={type} value={f[name]} onChange={set(name)} placeholder={placeholder}
+        style={{ ...S.input, color: f[name] ? "var(--text)" : "var(--faint)" }}
+        onFocus={focusInput} onBlur={blurInput}/>
+    </div>
+  );
+
+  return (
+    <div style={{ ...S.card, display:"flex", flexDirection:"column", gap:14 }} className="fade-in">
+      <span style={{ ...S.label, marginBottom:0 }}>Nueva sesión · GGAL/ABR26</span>
+
+      <Field label="📅 Fecha" name="date" type="date"/>
+
+      <div style={S.grid2}>
+        <Field label="✅ Ops ganadoras" name="opsWin" placeholder="0"/>
+        <Field label="❌ Ops perdedoras" name="opsLoss" placeholder="0"/>
+      </div>
+      <div style={S.grid2}>
+        <Field label="💹 Ganancia bruta $" name="grossWin" placeholder="0"/>
+        <Field label="💸 Pérdida bruta $" name="grossLoss" placeholder="0"/>
+      </div>
+      <div style={S.grid2}>
+        <Field label="💰 P&L neto $" name="pnl" placeholder="+ o −"/>
+        <Field label="📉 Drawdown máx $" name="drawdown" placeholder="0"/>
+      </div>
+
+      <div>
+        <label style={S.label}>🧠 Observación</label>
+        <textarea value={f.obs} onChange={set("obs")} rows={3}
+          placeholder="¿Respetaste el plan? ¿Qué pasó? ¿Qué aprendiste?"
+          style={{ ...S.input, resize:"none", lineHeight:1.6 }}
+          onFocus={focusInput} onBlur={blurInput}/>
+      </div>
+
+      {/* Live preview */}
+      {(wr || pf || rules.length > 0) && (
+        <div style={{ background:"#1c1c1e", border:"1px solid var(--border)", borderRadius:8, padding:12 }}>
+          <span style={{ ...S.label, marginBottom:8 }}>Preview en tiempo real</span>
+          <div style={{ display:"flex", gap:16, flexWrap:"wrap", marginBottom: rules.length ? 8 : 0 }}>
+            {wr && <span style={{ fontSize:13 }}>WR <strong style={{ color: parseFloat(wr)>=65 ? "var(--green)" : "var(--yellow)" }}>{wr}%</strong></span>}
+            {pf && <span style={{ fontSize:13 }}>PF <strong style={{ color: parseFloat(pf)>=1.5 ? "var(--green)" : parseFloat(pf)>=1 ? "var(--yellow)" : "var(--red)" }}>{pf}</strong></span>}
+          </div>
+          {rules.length > 0 && <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>{rules.map((r,i) => <Chip key={i} {...r}/>)}</div>}
+        </div>
+      )}
+
+      <button onClick={save} style={{ ...S.btn, background: saved ? "var(--green-bg)" : "var(--indigo)", color: saved ? "var(--green)" : "white" }}>
+        {saved ? "✓ SESIÓN REGISTRADA" : "REGISTRAR SESIÓN"}
+      </button>
+    </div>
+  );
+}
+
+// ── Monthly View ──────────────────────────────────────────────────────────────
+function MonthlyView({ sessions }) {
+  const daily = sessions.filter(s => s.type === "daily");
+  const months = {};
+  daily.forEach(s => {
+    const m = s.date.slice(0,7);
+    if (!months[m]) months[m] = { pnl:0, sessions:0, wins:0, ops:0 };
+    months[m].pnl += s.pnl;
+    months[m].sessions++;
+    months[m].wins += s.pnl > 0 ? 1 : 0;
+    months[m].ops += (s.opsWin||0) + (s.opsLoss||0);
+  });
+  const greenCount = 1 + Object.values(months).filter(m => m.pnl > 0).length;
+
+  return (
+    <div style={{ display:"flex", flexDirection:"column", gap:12 }} className="fade-in">
+      {/* Annual grid */}
+      <div style={S.card}>
+        <div style={{ display:"flex", justifyContent:"space-between", marginBottom:12 }}>
+          <span style={S.label}>Objetivo anual 2025</span>
+          <span style={{ fontSize:13, fontWeight:700, color:"var(--indigo)" }}>{greenCount} / 12 meses</span>
+        </div>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(12,1fr)", gap:4 }}>
+          {["E","F","M","A","M","J","J","A","S","O","N","D"].map((lbl,i) => {
+            const key = `2025-${String(i+1).padStart(2,"0")}`;
+            const data = months[key];
+            const isFeb = i === 1;
+            let bg = "var(--border)", tc = "var(--faint)";
+            if (isFeb) { bg = "var(--green-bg)"; tc = "var(--green)"; }
+            else if (data) { bg = data.pnl>0 ? "var(--green-bg)" : "var(--red-bg)"; tc = data.pnl>0 ? "var(--green)" : "var(--red)"; }
+            return (
+              <div key={lbl} style={{ background:bg, borderRadius:4, padding:"7px 0", textAlign:"center" }}>
+                <span style={{ fontSize:10, fontWeight:700, color:tc }}>{lbl}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Feb reference */}
+      <div style={{ ...S.card, borderColor:"var(--green-border)", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+        <span style={{ fontSize:13, color:"var(--text)" }}>Febrero 2025</span>
+        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+          <Chip type="ok" msg="Mes verde"/>
+          <span style={{ fontSize:11, color:"var(--muted)" }}>Sin detalle diario</span>
+        </div>
+      </div>
+
+      {/* Monthly cards */}
+      {Object.entries(months).sort((a,b) => b[0].localeCompare(a[0])).map(([m, data]) => (
+        <div key={m} style={S.card}>
+          <div style={{ display:"flex", justifyContent:"space-between", marginBottom:8 }}>
+            <span style={{ fontSize:13, color:"var(--text)" }}>{m}</span>
+            <span style={{ fontSize:14, fontWeight:700, color: data.pnl>=0 ? "var(--green)" : "var(--red)" }}>{fmtFull(data.pnl)}</span>
+          </div>
+          <div style={{ display:"flex", gap:16, fontSize:11, color:"var(--muted)" }}>
+            <span>{data.sessions} sesiones</span>
+            <span>WR {((data.wins/data.sessions)*100).toFixed(0)}%</span>
+            <span>{data.ops} contratos</span>
+          </div>
+        </div>
+      ))}
+
+      {!Object.keys(months).length && (
+        <div style={{ textAlign:"center", padding:"40px 0", color:"var(--faint)", fontSize:12 }}>
+          Sin sesiones diarias registradas aún.
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Main App ──────────────────────────────────────────────────────────────────
+function App() {
+  const [sessions, setSessions] = useState(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      return saved ? JSON.parse(saved) : [FEB_REF];
+    } catch { return [FEB_REF]; }
+  });
+  const [view, setView] = useState("dashboard");
+
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions)); } catch {}
+  }, [sessions]);
+
+  const addSession = s => setSessions(p => [s, ...p]);
+  const deleteSession = id => { if (id === "feb-2025") return; setSessions(p => p.filter(s => s.id !== id)); };
+
+  const m = useMemo(() => calcMetrics(sessions), [sessions]);
+  const daily = sessions.filter(s => s.type === "daily").sort((a,b) => b.date.localeCompare(a.date));
+
+  const TABS = [
+    { id:"dashboard", label:"Dashboard" },
+    { id:"nueva", label:"Nueva" },
+    { id:"sesiones", label:"Sesiones" },
+    { id:"mensual", label:"Mensual" },
+  ];
+
+  return (
+    <div style={S.page}>
+      {/* Header */}
+      <header style={S.header}>
+        <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+          <div style={{ width:4, height:24, borderRadius:2, background:"var(--indigo)" }}/>
+          <div>
+            <div style={{ fontSize:12, fontWeight:700, letterSpacing:"0.12em", textTransform:"uppercase" }}>Trading Log</div>
+            <div style={{ fontSize:10, color:"var(--muted)" }}>GGAL/ABR26 · 2025</div>
+          </div>
+        </div>
+        <nav style={{ display:"flex", gap:4 }}>
+          {TABS.map(t => (
+            <button key={t.id} onClick={() => setView(t.id)} style={{
+              padding:"6px 10px", borderRadius:8, border:"none", fontSize:10,
+              fontFamily:"monospace", textTransform:"uppercase", letterSpacing:"0.1em",
+              cursor:"pointer", transition:"all 0.15s",
+              background: view===t.id ? "var(--indigo)" : "transparent",
+              color: view===t.id ? "white" : "var(--muted)"
+            }}>{t.label}</button>
+          ))}
+        </nav>
+      </header>
+
+      <main style={S.main}>
+
+        {/* ── DASHBOARD ── */}
+        {view === "dashboard" && (
+          <div style={{ display:"flex", flexDirection:"column", gap:16 }} className="fade-in">
+            <div style={S.grid2}>
+              <KPI label="P&L Acumulado" value={m ? fmtFull(m.totalPnl) : "—"} sub={m ? `${m.totalDays} sesiones` : "Sin datos"} color={m?.totalPnl >= 0 ? "var(--green)" : "var(--red)"}/>
+              <KPI label="Win Rate" value={m ? `${m.wr.toFixed(1)}%` : "—"} sub={m ? `${m.wins}W · ${m.losses}L` : "Objetivo ≥65%"} color={!m ? "var(--muted)" : m.wr >= 65 ? "var(--green)" : "var(--yellow)"}/>
+              <KPI label="Profit Factor" value={m?.pf ? m.pf.toFixed(2) : "—"} sub="Objetivo > 1.5" color={!m?.pf ? "var(--muted)" : m.pf >= 1.5 ? "var(--green)" : m.pf >= 1 ? "var(--yellow)" : "var(--red)"}/>
+              <KPI label="Max Drawdown" value={m ? fmtShort(-m.maxDD) : "—"} sub="Desde pico de equity" color="var(--indigo)"/>
+            </div>
+
+            {m?.rrRatio && (
+              <div style={S.card}>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+                  <span style={S.label}>Ratio R/R promedio</span>
+                  <span style={{ fontSize:14, fontWeight:700, color: m.rrRatio>=1.5 ? "var(--green)" : m.rrRatio>=1 ? "var(--yellow)" : "var(--red)" }}>{m.rrRatio.toFixed(2)} : 1</span>
+                </div>
+                <div style={{ display:"flex", gap:16, fontSize:11, color:"var(--muted)" }}>
+                  <span>Avg win <span style={{ color:"var(--green)" }}>{fmtShort(m.avgWin)}</span></span>
+                  <span>Avg loss <span style={{ color:"var(--red)" }}>{fmtShort(-m.avgLoss)}</span></span>
+                </div>
+              </div>
+            )}
+
+            <div style={S.card}>
+              <span style={S.label}>Curva de equity</span>
+              <EquityCurve data={m?.equityCurve}/>
+            </div>
+
+            <MonthGrid months={m?.months} greenMonthsCount={m?.greenMonthsCount || 1}/>
+
+            <div style={S.card}>
+              <span style={S.label}>Reglas · No negociables</span>
+              <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                {[
+                  { k:"Alerta", v:"−$20.000", c:"var(--yellow)" },
+                  { k:"Cierre total", v:"−$40.000", c:"var(--red)" },
+                  { k:"Corte anticipado", v:"65 contratos / +$20.000", c:"var(--green)" },
+                  { k:"Horario", v:"10:30 → 13:00", c:"var(--indigo)" },
+                  { k:"Objetivo diario", v:"+$10.000", c:"var(--green)" },
+                ].map(r => (
+                  <div key={r.k} style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                    <span style={{ fontSize:12, color:"var(--muted)" }}>{r.k}</span>
+                    <span style={{ fontSize:12, fontWeight:700, color:r.c }}>{r.v}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {view === "nueva" && <NewSession onSave={addSession}/>}
+
+        {view === "sesiones" && (
+          <div style={{ display:"flex", flexDirection:"column", gap:10 }} className="fade-in">
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+              <span style={{ ...S.label, marginBottom:0 }}>{daily.length} sesiones registradas</span>
+              {m && <span style={{ fontSize:13, fontWeight:700, color: m.totalPnl>=0 ? "var(--green)" : "var(--red)" }}>{fmtFull(m.totalPnl)}</span>}
+            </div>
+            {daily.length === 0 && (
+              <div style={{ textAlign:"center", padding:"48px 0" }}>
+                <div style={{ fontSize:32, marginBottom:8 }}>◈</div>
+                <p style={{ fontSize:12, color:"var(--muted)", marginBottom:16 }}>Sin sesiones diarias aún.</p>
+                <button onClick={() => setView("nueva")} style={{ ...S.btn, width:"auto", padding:"8px 20px", background:"var(--indigo)", color:"white" }}>
+                  Cargar primera sesión →
+                </button>
+              </div>
+            )}
+            {daily.map(s => <SessionCard key={s.id} s={s} onDelete={deleteSession}/>)}
+          </div>
+        )}
+
+        {view === "mensual" && <MonthlyView sessions={sessions}/>}
+
+      </main>
+    </div>
+  );
+}
+
+ReactDOM.render(<App/>, document.getElementById("root"));
+</script>
+</body>
+</html>
