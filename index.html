@@ -322,47 +322,69 @@ function SessionCard({s,onDelete}) {
 }
 
 // ── New Session ───────────────────────────────────────────────────────────────
-const emptyForm={date:new Date().toISOString().split("T")[0],contratos:"",opsWin:"",opsLoss:"",grossWin:"",grossLoss:"",pnl:"",drawdown:"",obs:""};
-
 function NewSession({onSave}) {
-  const [f,setF]=useState(emptyForm),[saved,setSaved]=useState(false);
-  const set=k=>e=>setF(p=>({...p,[k]:e.target.value}));
-  const contratos=parseInt(f.contratos)||((parseInt(f.opsWin)||0)+(parseInt(f.opsLoss)||0));
-  const ops=(parseInt(f.opsWin)||0)+(parseInt(f.opsLoss)||0);
-  const wr=ops>0?((parseInt(f.opsWin)/ops)*100).toFixed(1):null;
-  const pf=parseFloat(f.grossLoss)>0?(parseFloat(f.grossWin)/parseFloat(f.grossLoss)).toFixed(2):null;
-  const rules=getRules(parseFloat(f.pnl)||0,contratos);
+  const [saved,setSaved]=useState(false);
+  const refs={
+    date:useRef(), contratos:useRef(), opsWin:useRef(), opsLoss:useRef(),
+    grossWin:useRef(), grossLoss:useRef(), pnl:useRef(), drawdown:useRef(), obs:useRef()
+  };
+  const today=new Date().toISOString().split("T")[0];
+
+  const clearAll=()=>{
+    refs.date.current.value=today;
+    ["contratos","opsWin","opsLoss","grossWin","grossLoss","pnl","drawdown","obs"].forEach(k=>{ refs[k].current.value=""; });
+  };
+
   const save=()=>{
-    if(!f.date||!f.pnl) return;
-    const totalContratos=parseInt(f.contratos)||((parseInt(f.opsWin)||0)+(parseInt(f.opsLoss)||0));
-    onSave({...f,id:Date.now(),type:"daily",pnl:parseFloat(f.pnl)||0,opsWin:parseInt(f.opsWin)||0,opsLoss:parseInt(f.opsLoss)||0,contratos:totalContratos,grossWin:parseFloat(f.grossWin)||0,grossLoss:parseFloat(f.grossLoss)||0,drawdown:parseFloat(f.drawdown)||0});
-    setF({...emptyForm,date:new Date().toISOString().split("T")[0]});
+    const pnlVal=parseFloat(refs.pnl.current.value)||0;
+    const dateVal=refs.date.current.value;
+    if(!dateVal||!pnlVal) return;
+    const opsWin=parseInt(refs.opsWin.current.value)||0;
+    const opsLoss=parseInt(refs.opsLoss.current.value)||0;
+    const contratos=parseInt(refs.contratos.current.value)||(opsWin+opsLoss);
+    onSave({
+      id:Date.now(), type:"daily",
+      date:dateVal, pnl:pnlVal,
+      contratos, opsWin, opsLoss,
+      grossWin:parseFloat(refs.grossWin.current.value)||0,
+      grossLoss:parseFloat(refs.grossLoss.current.value)||0,
+      drawdown:parseFloat(refs.drawdown.current.value)||0,
+      obs:refs.obs.current.value||"",
+    });
+    clearAll();
     setSaved(true); setTimeout(()=>setSaved(false),2000);
   };
+
   const fi=e=>e.target.style.borderColor="var(--indigo)";
   const bl=e=>e.target.style.borderColor="var(--border)";
-  const Field=({label,name,placeholder,type="text"})=>(
-    <div><label style={C.lbl}>{label}</label><input type={type} value={f[name]} onChange={set(name)} placeholder={placeholder} style={C.inp} onFocus={fi} onBlur={bl}/></div>
+  const Field=({label,refKey,placeholder,type="text"})=>(
+    <div>
+      <label style={C.lbl}>{label}</label>
+      <input ref={refs[refKey]} type={type} defaultValue={refKey==="date"?today:""} placeholder={placeholder} style={C.inp} onFocus={fi} onBlur={bl} autoComplete="off"/>
+    </div>
   );
+
   return (
     <div style={{...C.card,display:"flex",flexDirection:"column",gap:16}} className="fi">
       <span style={{...C.lbl,marginBottom:0}}>Nueva sesión · GGAL/ABR26</span>
-      <Field label="📅 Fecha" name="date" type="date"/>
-      <Field label="📊 Total contratos operados" name="contratos" placeholder="175"/>
-      <div style={C.g2}><Field label="✅ Ops ganadoras" name="opsWin" placeholder="0"/><Field label="❌ Ops perdedoras" name="opsLoss" placeholder="0"/></div>
-      <div style={C.g2}><Field label="💹 Ganancia bruta $" name="grossWin" placeholder="0"/><Field label="💸 Pérdida bruta $" name="grossLoss" placeholder="0"/></div>
-      <div style={C.g2}><Field label="💰 P&L neto $" name="pnl" placeholder="+ o −"/><Field label="📉 Drawdown máx $" name="drawdown" placeholder="0"/></div>
-      <div><label style={C.lbl}>🧠 Observación</label><textarea value={f.obs} onChange={e=>setF(p=>({...p,obs:e.target.value}))} rows={3} placeholder="¿Respetaste el plan? ¿Qué pasó? ¿Qué aprendiste?" style={{...C.inp,resize:"none",lineHeight:1.6}} onFocus={fi} onBlur={bl}/></div>
-      {(wr||pf||rules.length>0)&&(
-        <div style={{background:"#1c1c1e",border:"1px solid var(--border)",borderRadius:10,padding:14}}>
-          <span style={{...C.lbl,marginBottom:10}}>Preview</span>
-          <div style={{display:"flex",gap:16,flexWrap:"wrap",marginBottom:rules.length?10:0}}>
-            {wr&&<span style={{fontSize:14}}>WR <strong style={{color:parseFloat(wr)>=65?"var(--green)":"var(--yellow)"}}>{wr}%</strong></span>}
-            {pf&&<span style={{fontSize:14}}>PF <strong style={{color:parseFloat(pf)>=1.5?"var(--green)":parseFloat(pf)>=1?"var(--yellow)":"var(--red)"}}>{pf}</strong></span>}
-          </div>
-          {rules.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:6}}>{rules.map((r,i)=><Chip key={i} {...r}/>)}</div>}
-        </div>
-      )}
+      <Field label="📅 Fecha" refKey="date" type="date"/>
+      <Field label="📊 Total contratos operados" refKey="contratos" placeholder="175"/>
+      <div style={C.g2}>
+        <Field label="✅ Ops ganadoras" refKey="opsWin" placeholder="0"/>
+        <Field label="❌ Ops perdedoras" refKey="opsLoss" placeholder="0"/>
+      </div>
+      <div style={C.g2}>
+        <Field label="💹 Ganancia bruta $" refKey="grossWin" placeholder="0"/>
+        <Field label="💸 Pérdida bruta $" refKey="grossLoss" placeholder="0"/>
+      </div>
+      <div style={C.g2}>
+        <Field label="💰 P&L neto $" refKey="pnl" placeholder="+ o −"/>
+        <Field label="📉 Drawdown máx $" refKey="drawdown" placeholder="0"/>
+      </div>
+      <div>
+        <label style={C.lbl}>🧠 Observación</label>
+        <textarea ref={refs.obs} rows={3} placeholder="¿Respetaste el plan? ¿Qué pasó? ¿Qué aprendiste?" style={{...C.inp,resize:"none",lineHeight:1.6}} onFocus={fi} onBlur={bl}/>
+      </div>
       <button onClick={save} style={{...C.btn,background:saved?"var(--green-bg)":"var(--indigo)",color:saved?"var(--green)":"white"}}>
         {saved?"✓ SESIÓN REGISTRADA":"REGISTRAR SESIÓN"}
       </button>
