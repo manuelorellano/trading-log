@@ -31,31 +31,55 @@
 <body>
 <div id="root"></div>
 <script type="text/babel">
-const { useState, useMemo, useEffect } = React;
+const { useState, useMemo, useEffect, useRef } = React;
 const { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } = Recharts;
 
-const STORAGE_KEY = "trading_log_v1";
+// ── Storage ───────────────────────────────────────────────────────────────────
+const SK = "trading_log_v2";
 let _mem = null;
-function storageGet() {
-  try { const v = localStorage.getItem(STORAGE_KEY); if(v) return JSON.parse(v); } catch {}
-  try { const v = sessionStorage.getItem(STORAGE_KEY); if(v) return JSON.parse(v); } catch {}
+function sGet() {
+  try { const v=localStorage.getItem(SK); if(v) return JSON.parse(v); } catch {}
+  try { const v=sessionStorage.getItem(SK); if(v) return JSON.parse(v); } catch {}
   return _mem;
 }
-function storageSet(data) {
-  const s = JSON.stringify(data);
-  try { localStorage.setItem(STORAGE_KEY, s); return; } catch {}
-  try { sessionStorage.setItem(STORAGE_KEY, s); return; } catch {}
-  _mem = data;
+function sSet(d) {
+  const s=JSON.stringify(d);
+  try { localStorage.setItem(SK,s); return; } catch {}
+  try { sessionStorage.setItem(SK,s); return; } catch {}
+  _mem=d;
 }
 
-const FEB_REF = { id:"feb-2025", date:"2025-02", type:"monthly", pnl:1, note:"Mes rentable — sin detalle diario" };
+// ── Constants ─────────────────────────────────────────────────────────────────
+const FEB_REF = { id:"feb-2026", date:"2026-02", type:"monthly", pnl:1, note:"Mes rentable — sin detalle diario" };
+const OBJ_MENSUAL = 1100;
+const OBJ_SEMANAL = 275;
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
 function fmtFull(n) { return (n>=0?"+":"−")+"$"+Math.abs(n).toLocaleString("es-AR"); }
 function fmtShort(n) {
   const a=Math.abs(n), s=n>=0?"+":"−";
   if(a>=1000000) return s+"$"+(a/1000000).toFixed(1)+"M";
   if(a>=1000) return s+"$"+(a/1000).toFixed(1)+"k";
   return s+"$"+a;
+}
+
+// Get ISO week number
+function getWeek(dateStr) {
+  const d = new Date(dateStr);
+  const jan4 = new Date(d.getFullYear(), 0, 4);
+  const startOfWeek1 = new Date(jan4);
+  startOfWeek1.setDate(jan4.getDate() - (jan4.getDay() || 7) + 1);
+  const diff = d - startOfWeek1;
+  return Math.floor(diff / 604800000) + 1;
+}
+function getWeekYear(dateStr) {
+  const d = new Date(dateStr);
+  return `${d.getFullYear()}-W${String(getWeek(dateStr)).padStart(2,"0")}`;
+}
+
+// Current week key
+function currentWeekKey() {
+  return getWeekYear(new Date().toISOString().slice(0,10));
 }
 
 function calcMetrics(sessions) {
@@ -81,13 +105,31 @@ function calcMetrics(sessions) {
   const months={};
   daily.forEach(s=>{
     const mo=s.date.slice(0,7);
-    if(!months[mo]) months[mo]={pnl:0,sessions:0,wins:0,ops:0};
+    if(!months[mo]) months[mo]={pnl:0,sessions:0,wins:0,ops:0,contratos:0};
     months[mo].pnl+=s.pnl; months[mo].sessions++;
     months[mo].wins+=s.pnl>0?1:0;
     months[mo].ops+=(s.opsWin||0)+(s.opsLoss||0);
+    months[mo].contratos+=(s.opsWin||0)+(s.opsLoss||0);
   });
+
+  // Weekly contratos
+  const weeks={};
+  daily.forEach(s=>{
+    const wk=getWeekYear(s.date);
+    if(!weeks[wk]) weeks[wk]=0;
+    weeks[wk]+=(s.opsWin||0)+(s.opsLoss||0);
+  });
+
+  // Current month contratos
+  const currentMonth = new Date().toISOString().slice(0,7);
+  const contratosThisMonth = (months[currentMonth]?.contratos)||0;
+
+  // Current week contratos
+  const cwk = currentWeekKey();
+  const contratosThisWeek = weeks[cwk]||0;
+
   const greenMonthsCount=1+Object.values(months).filter(m=>m.pnl>0).length;
-  return { totalPnl, wins, losses, wr, pf, avgWin, avgLoss, rrRatio, maxDD, equityCurve, months, totalDays:daily.length, greenMonthsCount };
+  return { totalPnl, wins, losses, wr, pf, avgWin, avgLoss, rrRatio, maxDD, equityCurve, months, weeks, totalDays:daily.length, greenMonthsCount, contratosThisMonth, contratosThisWeek, currentMonth, currentWeek:cwk, daily:sorted };
 }
 
 function getRules(pnl, ops) {
@@ -99,11 +141,19 @@ function getRules(pnl, ops) {
   return f;
 }
 
-const C = { card:{borderRadius:12,border:"1px solid var(--border)",background:"var(--surface)",padding:16}, lbl:{fontSize:10,textTransform:"uppercase",letterSpacing:"0.18em",color:"var(--muted)",marginBottom:6,display:"block"}, inp:{width:"100%",background:"#1c1c1e",border:"1px solid var(--border)",borderRadius:8,padding:"10px 12px",fontSize:13,color:"var(--text)",fontFamily:"inherit",transition:"border-color 0.15s"}, btn:{width:"100%",padding:"12px",borderRadius:10,border:"none",fontSize:13,fontWeight:700,letterSpacing:"0.1em",cursor:"pointer",fontFamily:"inherit",transition:"all 0.15s"}, g2:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12} };
+// ── Styles ────────────────────────────────────────────────────────────────────
+const C = {
+  card:{borderRadius:14,border:"1px solid var(--border)",background:"var(--surface)",padding:20},
+  lbl:{fontSize:10,textTransform:"uppercase",letterSpacing:"0.18em",color:"var(--muted)",marginBottom:8,display:"block"},
+  inp:{width:"100%",background:"#1c1c1e",border:"1px solid var(--border)",borderRadius:8,padding:"11px 14px",fontSize:14,color:"var(--text)",fontFamily:"inherit",transition:"border-color 0.15s"},
+  btn:{width:"100%",padding:"14px",borderRadius:10,border:"none",fontSize:13,fontWeight:700,letterSpacing:"0.1em",cursor:"pointer",fontFamily:"inherit",transition:"all 0.15s"},
+  g2:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14},
+};
 
+// ── Components ────────────────────────────────────────────────────────────────
 function Chip({type,msg}) {
   const s={danger:{background:"var(--red-bg)",color:"var(--red)",border:"1px solid var(--red-border)"},warn:{background:"var(--yellow-bg)",color:"var(--yellow)",border:"1px solid #92400e"},ok:{background:"var(--green-bg)",color:"var(--green)",border:"1px solid var(--green-border)"}}[type];
-  return <span style={{...s,fontSize:11,padding:"2px 8px",borderRadius:4}}>{msg}</span>;
+  return <span style={{...s,fontSize:11,padding:"3px 10px",borderRadius:4}}>{msg}</span>;
 }
 
 function KPI({label,value,sub,color}) {
@@ -111,8 +161,91 @@ function KPI({label,value,sub,color}) {
     <div style={{...C.card,position:"relative",overflow:"hidden"}}>
       <div style={{position:"absolute",top:0,left:0,right:0,height:1,background:`linear-gradient(90deg,transparent,${color},transparent)`}}/>
       <span style={C.lbl}>{label}</span>
-      <div style={{fontSize:22,fontWeight:700,color,fontVariantNumeric:"tabular-nums"}}>{value}</div>
-      {sub&&<div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>{sub}</div>}
+      <div style={{fontSize:26,fontWeight:700,color,fontVariantNumeric:"tabular-nums",lineHeight:1.1}}>{value}</div>
+      {sub&&<div style={{fontSize:12,color:"var(--muted)",marginTop:4}}>{sub}</div>}
+    </div>
+  );
+}
+
+// ── Contratos progress bar ───────────────────────────────────────────────────
+function ContratosBar({actual, objetivo, label, sub}) {
+  const pct = Math.min(100, (actual/objetivo)*100);
+  const isOver = actual >= objetivo;
+  const color = isOver ? "var(--green)" : actual > objetivo*0.7 ? "var(--yellow)" : "var(--indigo)";
+  const restantes = Math.max(0, objetivo - actual);
+  return (
+    <div style={C.card}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+        <span style={C.lbl}>{label}</span>
+        <span style={{fontSize:22,fontWeight:700,color,fontVariantNumeric:"tabular-nums"}}>{actual.toLocaleString()} <span style={{fontSize:13,color:"var(--muted)",fontWeight:400}}>/ {objetivo.toLocaleString()}</span></span>
+      </div>
+      <div style={{height:6,background:"var(--border)",borderRadius:3,overflow:"hidden",marginBottom:10}}>
+        <div style={{height:"100%",borderRadius:3,background:color,width:`${pct}%`,transition:"width 0.4s ease"}}/>
+      </div>
+      <div style={{display:"flex",justifyContent:"space-between",fontSize:12}}>
+        <span style={{color:"var(--muted)"}}>{pct.toFixed(1)}% completado</span>
+        {isOver
+          ? <span style={{color:"var(--green)",fontWeight:700}}>✓ Objetivo alcanzado</span>
+          : <span style={{color:"var(--muted)"}}>Restan <span style={{color:"var(--text)",fontWeight:700}}>{restantes.toLocaleString()}</span> contratos</span>
+        }
+      </div>
+      {sub && <div style={{fontSize:11,color:"var(--muted)",marginTop:6}}>{sub}</div>}
+    </div>
+  );
+}
+
+// ── Weekly contratos badge ────────────────────────────────────────────────────
+function WeeklyContratos({actual}) {
+  const ok = actual >= OBJ_SEMANAL;
+  return (
+    <div style={{...C.card,borderColor:ok?"var(--green-border)":"var(--red-border)",background:ok?"var(--green-bg)":"var(--red-bg)"}}>
+      <span style={{...C.lbl,color:ok?"var(--green)":"var(--red)"}}>Contratos semanales</span>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <div>
+          <div style={{fontSize:28,fontWeight:700,color:ok?"var(--green)":"var(--red)"}}>{actual.toLocaleString()}<span style={{fontSize:14,fontWeight:400,color:ok?"#4ade8099":"#f8717199"}}> / {OBJ_SEMANAL}</span></div>
+          <div style={{fontSize:12,marginTop:4,color:ok?"var(--green)":"var(--red)"}}>
+            {ok ? "✓ Objetivo semanal alcanzado" : `Faltan ${OBJ_SEMANAL - actual} contratos`}
+          </div>
+        </div>
+        <div style={{fontSize:36}}>{ok?"🟢":"🔴"}</div>
+      </div>
+    </div>
+  );
+}
+
+// ── Days grid ────────────────────────────────────────────────────────────────
+function DaysGrid({sessions}) {
+  const daily = sessions.filter(s=>s.type==="daily").sort((a,b)=>a.date.localeCompare(b.date));
+  if(!daily.length) return (
+    <div style={C.card}>
+      <span style={C.lbl}>Días operados</span>
+      <div style={{textAlign:"center",padding:"20px 0",color:"var(--faint)",fontSize:12}}>Sin sesiones aún</div>
+    </div>
+  );
+  return (
+    <div style={C.card}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+        <span style={C.lbl}>Días operados</span>
+        <div style={{display:"flex",gap:12,fontSize:11,color:"var(--muted)"}}>
+          <span>🟢 {daily.filter(s=>s.pnl>0).length} ganadores</span>
+          <span>🔴 {daily.filter(s=>s.pnl<=0).length} perdedores</span>
+        </div>
+      </div>
+      <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+        {daily.map(s=>{
+          const isPos=s.pnl>0;
+          return (
+            <div key={s.id} title={`${s.date}: ${fmtFull(s.pnl)}`} style={{
+              width:36, height:36, borderRadius:6, display:"flex", alignItems:"center", justifyContent:"center",
+              background: isPos?"var(--green-bg)":"var(--red-bg)",
+              border: `1px solid ${isPos?"var(--green-border)":"var(--red-border)"}`,
+              cursor:"default", position:"relative"
+            }}>
+              <span style={{fontSize:9,fontWeight:700,color:isPos?"var(--green)":"var(--red)"}}>{s.date.slice(5)}</span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -124,10 +257,10 @@ function CTip({active,payload,label}) {
 }
 
 function EquityCurve({data}) {
-  if(!data?.length) return <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:130,color:"var(--faint)",fontSize:12}}>Sin datos aún — registrá tu primera sesión</div>;
+  if(!data?.length) return <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:150,color:"var(--faint)",fontSize:12}}>Sin datos aún — registrá tu primera sesión</div>;
   const color=(data[data.length-1]?.equity||0)>=0?"#4ade80":"#f87171";
   return (
-    <ResponsiveContainer width="100%" height={130}>
+    <ResponsiveContainer width="100%" height={150}>
       <AreaChart data={data} margin={{top:4,right:4,bottom:0,left:0}}>
         <defs><linearGradient id="eq" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={color} stopOpacity={0.2}/><stop offset="95%" stopColor={color} stopOpacity={0}/></linearGradient></defs>
         <ReferenceLine y={0} stroke="var(--border)" strokeDasharray="3 3"/>
@@ -143,14 +276,14 @@ function EquityCurve({data}) {
 function MonthGrid({months,count}) {
   return (
     <div style={C.card}>
-      <div style={{display:"flex",justifyContent:"space-between",marginBottom:12}}><span style={C.lbl}>Meses en verde 2025</span><span style={{fontSize:13,fontWeight:700,color:"var(--indigo)"}}>{count} / 12</span></div>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(12,1fr)",gap:4}}>
+      <div style={{display:"flex",justifyContent:"space-between",marginBottom:14}}><span style={C.lbl}>Meses en verde 2026</span><span style={{fontSize:16,fontWeight:700,color:"var(--indigo)"}}>{count} / 12</span></div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(12,1fr)",gap:5}}>
         {["E","F","M","A","M","J","J","A","S","O","N","D"].map((lbl,i)=>{
-          const key=`2025-${String(i+1).padStart(2,"0")}`, d=months?.[key], isFeb=i===1;
+          const key=`2026-${String(i+1).padStart(2,"0")}`, d=months?.[key], isFeb=i===1;
           let bg="var(--border)",tc="var(--faint)";
           if(isFeb){bg="var(--green-bg)";tc="var(--green)";}
           else if(d){bg=d.pnl>0?"var(--green-bg)":"var(--red-bg)";tc=d.pnl>0?"var(--green)":"var(--red)";}
-          return <div key={i} style={{background:bg,borderRadius:4,padding:"6px 0",textAlign:"center"}}><span style={{fontSize:10,fontWeight:700,color:tc}}>{lbl}</span></div>;
+          return <div key={i} style={{background:bg,borderRadius:5,padding:"8px 0",textAlign:"center"}}><span style={{fontSize:11,fontWeight:700,color:tc}}>{lbl}</span></div>;
         })}
       </div>
     </div>
@@ -165,32 +298,33 @@ function SessionCard({s,onDelete}) {
   const rules=getRules(s.pnl,ops);
   return (
     <div style={{...C.card,borderColor:hov?"var(--border-hover)":"var(--border)",transition:"border-color 0.15s"}} onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)} className="fi">
-      <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
-        <div style={{display:"flex",alignItems:"center",gap:10}}>
-          <span style={{fontSize:11,color:"var(--muted)"}}>{s.date}</span>
-          <span style={{fontSize:16,fontWeight:700,color:isPos?"var(--green)":"var(--red)"}}>{fmtFull(s.pnl)}</span>
+      <div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}>
+        <div style={{display:"flex",alignItems:"center",gap:12}}>
+          <span style={{fontSize:12,color:"var(--muted)"}}>{s.date}</span>
+          <span style={{fontSize:18,fontWeight:700,color:isPos?"var(--green)":"var(--red)"}}>{fmtFull(s.pnl)}</span>
         </div>
-        {hov&&<button onClick={()=>onDelete(s.id)} style={{background:"none",border:"none",color:"var(--faint)",cursor:"pointer",fontSize:12}} onMouseEnter={e=>e.target.style.color="var(--red)"} onMouseLeave={e=>e.target.style.color="var(--faint)"}>✕</button>}
+        {hov&&<button onClick={()=>onDelete(s.id)} style={{background:"none",border:"none",color:"var(--faint)",cursor:"pointer",fontSize:13}} onMouseEnter={e=>e.target.style.color="var(--red)"} onMouseLeave={e=>e.target.style.color="var(--faint)"}>✕</button>}
       </div>
-      <div style={{height:3,background:"var(--border)",borderRadius:2,overflow:"hidden",marginBottom:10,position:"relative"}}>
+      <div style={{height:3,background:"var(--border)",borderRadius:2,overflow:"hidden",marginBottom:12,position:"relative"}}>
         <div style={{position:"absolute",top:0,left:"50%",width:1,height:"100%",background:"var(--faint)"}}/>
         <div style={{position:"absolute",top:0,height:"100%",borderRadius:2,background:isPos?"var(--green)":"var(--red)",left:isPos?"50%":`${Math.max(0,50-Math.min(49,Math.abs(s.pnl)/1000))}%`,width:`${Math.min(49,Math.abs(s.pnl)/1000)}%`}}/>
       </div>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:rules.length||s.obs?10:0}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:rules.length||s.obs?12:0}}>
         {[{l:"OPS",v:ops||"—",c:"var(--text)"},{l:"WR",v:wr?wr+"%":"—",c:wr>=65?"var(--green)":wr?"var(--yellow)":"var(--muted)"},{l:"PF",v:pf||"—",c:pf>=1.5?"var(--green)":pf>=1?"var(--yellow)":pf?"var(--red)":"var(--muted)"},{l:"DD",v:s.drawdown?fmtShort(-s.drawdown):"—",c:"var(--text)"}].map(c=>(
-          <div key={c.l}><div style={{fontSize:10,color:"var(--muted)",marginBottom:2}}>{c.l}</div><div style={{fontSize:12,fontWeight:700,color:c.c}}>{c.v}</div></div>
+          <div key={c.l}><div style={{fontSize:10,color:"var(--muted)",marginBottom:3}}>{c.l}</div><div style={{fontSize:14,fontWeight:700,color:c.c}}>{c.v}</div></div>
         ))}
       </div>
-      {rules.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:s.obs?8:0}}>{rules.map((r,i)=><Chip key={i} {...r}/>)}</div>}
-      {s.obs&&<p style={{fontSize:11,color:"var(--muted)",fontStyle:"italic",borderLeft:"2px solid var(--border)",paddingLeft:8,lineHeight:1.6,margin:0}}>{s.obs}</p>}
+      {rules.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:s.obs?10:0}}>{rules.map((r,i)=><Chip key={i} {...r}/>)}</div>}
+      {s.obs&&<p style={{fontSize:12,color:"var(--muted)",fontStyle:"italic",borderLeft:"2px solid var(--border)",paddingLeft:10,lineHeight:1.6,margin:0}}>{s.obs}</p>}
     </div>
   );
 }
 
-const emptyForm = {date:new Date().toISOString().split("T")[0],opsWin:"",opsLoss:"",grossWin:"",grossLoss:"",pnl:"",drawdown:"",obs:""};
+// ── New Session ───────────────────────────────────────────────────────────────
+const emptyForm={date:new Date().toISOString().split("T")[0],opsWin:"",opsLoss:"",grossWin:"",grossLoss:"",pnl:"",drawdown:"",obs:""};
 
 function NewSession({onSave}) {
-  const [f,setF]=useState(emptyForm), [saved,setSaved]=useState(false);
+  const [f,setF]=useState(emptyForm),[saved,setSaved]=useState(false);
   const set=k=>e=>setF(p=>({...p,[k]:e.target.value}));
   const ops=(parseInt(f.opsWin)||0)+(parseInt(f.opsLoss)||0);
   const wr=ops>0?((parseInt(f.opsWin)/ops)*100).toFixed(1):null;
@@ -208,7 +342,7 @@ function NewSession({onSave}) {
     <div><label style={C.lbl}>{label}</label><input type={type} value={f[name]} onChange={set(name)} placeholder={placeholder} style={C.inp} onFocus={fi} onBlur={bl}/></div>
   );
   return (
-    <div style={{...C.card,display:"flex",flexDirection:"column",gap:14}} className="fi">
+    <div style={{...C.card,display:"flex",flexDirection:"column",gap:16}} className="fi">
       <span style={{...C.lbl,marginBottom:0}}>Nueva sesión · GGAL/ABR26</span>
       <Field label="📅 Fecha" name="date" type="date"/>
       <div style={C.g2}><Field label="✅ Ops ganadoras" name="opsWin" placeholder="0"/><Field label="❌ Ops perdedoras" name="opsLoss" placeholder="0"/></div>
@@ -216,11 +350,11 @@ function NewSession({onSave}) {
       <div style={C.g2}><Field label="💰 P&L neto $" name="pnl" placeholder="+ o −"/><Field label="📉 Drawdown máx $" name="drawdown" placeholder="0"/></div>
       <div><label style={C.lbl}>🧠 Observación</label><textarea value={f.obs} onChange={set("obs")} rows={3} placeholder="¿Respetaste el plan? ¿Qué pasó? ¿Qué aprendiste?" style={{...C.inp,resize:"none",lineHeight:1.6}} onFocus={fi} onBlur={bl}/></div>
       {(wr||pf||rules.length>0)&&(
-        <div style={{background:"#1c1c1e",border:"1px solid var(--border)",borderRadius:8,padding:12}}>
-          <span style={{...C.lbl,marginBottom:8}}>Preview</span>
-          <div style={{display:"flex",gap:16,flexWrap:"wrap",marginBottom:rules.length?8:0}}>
-            {wr&&<span style={{fontSize:13}}>WR <strong style={{color:parseFloat(wr)>=65?"var(--green)":"var(--yellow)"}}>{wr}%</strong></span>}
-            {pf&&<span style={{fontSize:13}}>PF <strong style={{color:parseFloat(pf)>=1.5?"var(--green)":parseFloat(pf)>=1?"var(--yellow)":"var(--red)"}}>{pf}</strong></span>}
+        <div style={{background:"#1c1c1e",border:"1px solid var(--border)",borderRadius:10,padding:14}}>
+          <span style={{...C.lbl,marginBottom:10}}>Preview</span>
+          <div style={{display:"flex",gap:16,flexWrap:"wrap",marginBottom:rules.length?10:0}}>
+            {wr&&<span style={{fontSize:14}}>WR <strong style={{color:parseFloat(wr)>=65?"var(--green)":"var(--yellow)"}}>{wr}%</strong></span>}
+            {pf&&<span style={{fontSize:14}}>PF <strong style={{color:parseFloat(pf)>=1.5?"var(--green)":parseFloat(pf)>=1?"var(--yellow)":"var(--red)"}}>{pf}</strong></span>}
           </div>
           {rules.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:6}}>{rules.map((r,i)=><Chip key={i} {...r}/>)}</div>}
         </div>
@@ -232,6 +366,7 @@ function NewSession({onSave}) {
   );
 }
 
+// ── Monthly view ──────────────────────────────────────────────────────────────
 function MonthlyView({sessions}) {
   const daily=sessions.filter(s=>s.type==="daily"), months={};
   daily.forEach(s=>{
@@ -242,27 +377,34 @@ function MonthlyView({sessions}) {
   });
   const greenCount=1+Object.values(months).filter(m=>m.pnl>0).length;
   return (
-    <div style={{display:"flex",flexDirection:"column",gap:12}} className="fi">
+    <div style={{display:"flex",flexDirection:"column",gap:14}} className="fi">
       <div style={C.card}>
-        <div style={{display:"flex",justifyContent:"space-between",marginBottom:12}}><span style={C.lbl}>Objetivo anual 2025</span><span style={{fontSize:13,fontWeight:700,color:"var(--indigo)"}}>{greenCount} / 12 meses</span></div>
-        <div style={{display:"grid",gridTemplateColumns:"repeat(12,1fr)",gap:4}}>
+        <div style={{display:"flex",justifyContent:"space-between",marginBottom:14}}><span style={C.lbl}>Objetivo anual 2026</span><span style={{fontSize:16,fontWeight:700,color:"var(--indigo)"}}>{greenCount} / 12 meses</span></div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(12,1fr)",gap:5}}>
           {["E","F","M","A","M","J","J","A","S","O","N","D"].map((lbl,i)=>{
-            const key=`2025-${String(i+1).padStart(2,"0")}`, d=months[key], isFeb=i===1;
+            const key=`2026-${String(i+1).padStart(2,"0")}`, d=months[key], isFeb=i===1;
             let bg="var(--border)",tc="var(--faint)";
             if(isFeb){bg="var(--green-bg)";tc="var(--green)";}
             else if(d){bg=d.pnl>0?"var(--green-bg)":"var(--red-bg)";tc=d.pnl>0?"var(--green)":"var(--red)";}
-            return <div key={i} style={{background:bg,borderRadius:4,padding:"7px 0",textAlign:"center"}}><span style={{fontSize:10,fontWeight:700,color:tc}}>{lbl}</span></div>;
+            return <div key={i} style={{background:bg,borderRadius:5,padding:"8px 0",textAlign:"center"}}><span style={{fontSize:11,fontWeight:700,color:tc}}>{lbl}</span></div>;
           })}
         </div>
       </div>
       <div style={{...C.card,borderColor:"var(--green-border)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-        <span style={{fontSize:13,color:"var(--text)"}}>Febrero 2025</span>
-        <div style={{display:"flex",alignItems:"center",gap:8}}><Chip type="ok" msg="Mes verde"/><span style={{fontSize:11,color:"var(--muted)"}}>Sin detalle diario</span></div>
+        <span style={{fontSize:14,color:"var(--text)"}}>Febrero 2026</span>
+        <div style={{display:"flex",alignItems:"center",gap:8}}><Chip type="ok" msg="Mes verde"/><span style={{fontSize:12,color:"var(--muted)"}}>Sin detalle diario</span></div>
       </div>
       {Object.entries(months).sort((a,b)=>b[0].localeCompare(a[0])).map(([m,d])=>(
         <div key={m} style={C.card}>
-          <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}><span style={{fontSize:13,color:"var(--text)"}}>{m}</span><span style={{fontSize:14,fontWeight:700,color:d.pnl>=0?"var(--green)":"var(--red)"}}>{fmtFull(d.pnl)}</span></div>
-          <div style={{display:"flex",gap:16,fontSize:11,color:"var(--muted)"}}><span>{d.sessions} sesiones</span><span>WR {((d.wins/d.sessions)*100).toFixed(0)}%</span><span>{d.ops} contratos</span></div>
+          <div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}>
+            <span style={{fontSize:14,color:"var(--text)"}}>{m}</span>
+            <span style={{fontSize:16,fontWeight:700,color:d.pnl>=0?"var(--green)":"var(--red)"}}>{fmtFull(d.pnl)}</span>
+          </div>
+          <div style={{display:"flex",gap:16,fontSize:12,color:"var(--muted)"}}>
+            <span>{d.sessions} sesiones</span>
+            <span>WR {((d.wins/d.sessions)*100).toFixed(0)}%</span>
+            <span>{d.ops} contratos</span>
+          </div>
         </div>
       ))}
       {!Object.keys(months).length&&<div style={{textAlign:"center",padding:"40px 0",color:"var(--faint)",fontSize:12}}>Sin sesiones diarias registradas aún.</div>}
@@ -270,76 +412,214 @@ function MonthlyView({sessions}) {
   );
 }
 
+// ── Backup view ───────────────────────────────────────────────────────────────
+function BackupView({sessions,onImport}) {
+  const fileRef=useRef();
+  const [msg,setMsg]=useState(null);
+
+  const exportData=()=>{
+    const blob=new Blob([JSON.stringify(sessions,null,2)],{type:"application/json"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");
+    a.href=url;
+    a.download=`trading-log-backup-${new Date().toISOString().slice(0,10)}.json`;
+    a.click(); URL.revokeObjectURL(url);
+  };
+
+  const handleFile=e=>{
+    const file=e.target.files[0];
+    if(!file) return;
+    const reader=new FileReader();
+    reader.onload=ev=>{
+      try {
+        const data=JSON.parse(ev.target.result);
+        if(!Array.isArray(data)) throw new Error();
+        onImport(data);
+        setMsg({type:"ok",text:`✓ ${data.length} sesiones importadas correctamente`});
+      } catch {
+        setMsg({type:"err",text:"✕ Archivo inválido — debe ser un backup de Trading Log"});
+      }
+      setTimeout(()=>setMsg(null),4000);
+    };
+    reader.readAsText(file);
+    e.target.value="";
+  };
+
+  const daily=sessions.filter(s=>s.type==="daily");
+
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:14}} className="fi">
+      <div style={C.card}>
+        <span style={C.lbl}>Exportar datos</span>
+        <p style={{fontSize:13,color:"var(--muted)",marginBottom:16,lineHeight:1.6}}>Descarga un archivo JSON con todas tus sesiones. Guardalo en un pendrive o mandátelo por mail antes de viajar.</p>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16,padding:"12px 14px",background:"#1c1c1e",borderRadius:8}}>
+          <span style={{fontSize:13,color:"var(--muted)"}}>Sesiones guardadas</span>
+          <span style={{fontSize:16,fontWeight:700,color:"var(--indigo)"}}>{daily.length}</span>
+        </div>
+        <button onClick={exportData} style={{...C.btn,background:"var(--indigo)",color:"white"}}>
+          ⬇ EXPORTAR BACKUP
+        </button>
+      </div>
+
+      <div style={C.card}>
+        <span style={C.lbl}>Importar datos</span>
+        <p style={{fontSize:13,color:"var(--muted)",marginBottom:16,lineHeight:1.6}}>Cargá un archivo de backup para restaurar tus sesiones en este navegador. <strong style={{color:"var(--yellow)"}}>Esto reemplaza los datos actuales.</strong></p>
+        <input type="file" accept=".json" ref={fileRef} onChange={handleFile} style={{display:"none"}}/>
+        <button onClick={()=>fileRef.current.click()} style={{...C.btn,background:"#1c1c1e",border:"1px solid var(--border)",color:"var(--text)"}}>
+          ⬆ IMPORTAR BACKUP
+        </button>
+        {msg&&(
+          <div style={{marginTop:12,padding:"10px 14px",borderRadius:8,background:msg.type==="ok"?"var(--green-bg)":"var(--red-bg)",border:`1px solid ${msg.type==="ok"?"var(--green-border)":"var(--red-border)"}`,fontSize:13,color:msg.type==="ok"?"var(--green)":"var(--red)"}}>
+            {msg.text}
+          </div>
+        )}
+      </div>
+
+      <div style={C.card}>
+        <span style={C.lbl}>Instrucciones para viajar</span>
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {[
+            {n:"1",t:"Exportá el backup desde esta pantalla"},
+            {n:"2",t:"Guardá el archivo .json en un pendrive o Drive"},
+            {n:"3",t:"En la PC destino, abrí tu URL de GitHub Pages"},
+            {n:"4",t:"Entrá a Backup → Importar y cargá el archivo"},
+            {n:"5",t:"Al volver, repetí el proceso en dirección inversa"},
+          ].map(s=>(
+            <div key={s.n} style={{display:"flex",gap:12,alignItems:"flex-start"}}>
+              <div style={{width:22,height:22,borderRadius:"50%",background:"var(--indigo)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,flexShrink:0}}>{s.n}</div>
+              <span style={{fontSize:13,color:"var(--muted)",lineHeight:1.5}}>{s.t}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── App ───────────────────────────────────────────────────────────────────────
 function App() {
-  const [sessions,setSessions]=useState(()=>storageGet()||[FEB_REF]);
+  const [sessions,setSessions]=useState(()=>sGet()||[FEB_REF]);
   const [view,setView]=useState("dashboard");
-  useEffect(()=>{ storageSet(sessions); },[sessions]);
+  useEffect(()=>{ sSet(sessions); },[sessions]);
   const addSession=s=>setSessions(p=>[s,...p]);
-  const deleteSession=id=>{ if(id==="feb-2025") return; setSessions(p=>p.filter(s=>s.id!==id)); };
+  const deleteSession=id=>{ if(id==="feb-2026") return; setSessions(p=>p.filter(s=>s.id!==id)); };
+  const importSessions=data=>setSessions(data);
   const m=useMemo(()=>calcMetrics(sessions),[sessions]);
   const daily=sessions.filter(s=>s.type==="daily").sort((a,b)=>b.date.localeCompare(a.date));
-  const TABS=[{id:"dashboard",label:"Dashboard"},{id:"nueva",label:"Nueva"},{id:"sesiones",label:"Sesiones"},{id:"mensual",label:"Mensual"}];
+  const TABS=[
+    {id:"dashboard",label:"Dashboard"},
+    {id:"nueva",label:"Nueva"},
+    {id:"sesiones",label:"Sesiones"},
+    {id:"mensual",label:"Mensual"},
+    {id:"backup",label:"Backup"},
+  ];
 
   return (
     <div style={{minHeight:"100vh",background:"var(--bg)"}}>
-      <header style={{borderBottom:"1px solid var(--border)",padding:"12px 20px",display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,background:"rgba(9,9,11,0.97)",backdropFilter:"blur(12px)",zIndex:20}}>
+      <header style={{borderBottom:"1px solid var(--border)",padding:"14px 24px",display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,background:"rgba(9,9,11,0.97)",backdropFilter:"blur(12px)",zIndex:20}}>
         <div style={{display:"flex",alignItems:"center",gap:12}}>
-          <div style={{width:4,height:24,borderRadius:2,background:"var(--indigo)"}}/>
-          <div><div style={{fontSize:12,fontWeight:700,letterSpacing:"0.12em",textTransform:"uppercase"}}>Trading Log</div><div style={{fontSize:10,color:"var(--muted)"}}>GGAL/ABR26 · 2025</div></div>
+          <div style={{width:4,height:28,borderRadius:2,background:"var(--indigo)"}}/>
+          <div>
+            <div style={{fontSize:13,fontWeight:700,letterSpacing:"0.12em",textTransform:"uppercase"}}>Trading Log</div>
+            <div style={{fontSize:11,color:"var(--muted)"}}>GGAL/ABR26 · 2026</div>
+          </div>
         </div>
         <nav style={{display:"flex",gap:4}}>
-          {TABS.map(t=><button key={t.id} onClick={()=>setView(t.id)} style={{padding:"6px 10px",borderRadius:8,border:"none",fontSize:10,fontFamily:"monospace",textTransform:"uppercase",letterSpacing:"0.1em",cursor:"pointer",transition:"all 0.15s",background:view===t.id?"var(--indigo)":"transparent",color:view===t.id?"white":"var(--muted)"}}>{t.label}</button>)}
+          {TABS.map(t=><button key={t.id} onClick={()=>setView(t.id)} style={{padding:"7px 12px",borderRadius:8,border:"none",fontSize:10,fontFamily:"monospace",textTransform:"uppercase",letterSpacing:"0.1em",cursor:"pointer",transition:"all 0.15s",background:view===t.id?"var(--indigo)":"transparent",color:view===t.id?"white":"var(--muted)"}}>{t.label}</button>)}
         </nav>
       </header>
 
-      <main style={{maxWidth:560,margin:"0 auto",padding:"24px 16px",display:"flex",flexDirection:"column",gap:16}}>
+      <main style={{maxWidth:600,margin:"0 auto",padding:"28px 18px",display:"flex",flexDirection:"column",gap:18}}>
+
         {view==="dashboard"&&(
-          <div style={{display:"flex",flexDirection:"column",gap:16}} className="fi">
+          <div style={{display:"flex",flexDirection:"column",gap:18}} className="fi">
+            {/* KPIs */}
             <div style={C.g2}>
               <KPI label="P&L Acumulado" value={m?fmtFull(m.totalPnl):"—"} sub={m?`${m.totalDays} sesiones`:"Sin datos"} color={m?.totalPnl>=0?"var(--green)":"var(--red)"}/>
               <KPI label="Win Rate" value={m?`${m.wr.toFixed(1)}%`:"—"} sub={m?`${m.wins}W · ${m.losses}L`:"Objetivo ≥65%"} color={!m?"var(--muted)":m.wr>=65?"var(--green)":"var(--yellow)"}/>
               <KPI label="Profit Factor" value={m?.pf?m.pf.toFixed(2):"—"} sub="Objetivo > 1.5" color={!m?.pf?"var(--muted)":m.pf>=1.5?"var(--green)":m.pf>=1?"var(--yellow)":"var(--red)"}/>
               <KPI label="Max Drawdown" value={m?fmtShort(-m.maxDD):"—"} sub="Desde pico de equity" color="var(--indigo)"/>
             </div>
+
+            {/* R/R */}
             {m?.rrRatio&&(
               <div style={C.card}>
-                <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}><span style={C.lbl}>Ratio R/R promedio</span><span style={{fontSize:14,fontWeight:700,color:m.rrRatio>=1.5?"var(--green)":m.rrRatio>=1?"var(--yellow)":"var(--red)"}}>{m.rrRatio.toFixed(2)} : 1</span></div>
-                <div style={{display:"flex",gap:16,fontSize:11,color:"var(--muted)"}}>
+                <div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}>
+                  <span style={C.lbl}>Ratio R/R promedio</span>
+                  <span style={{fontSize:20,fontWeight:700,color:m.rrRatio>=1.5?"var(--green)":m.rrRatio>=1?"var(--yellow)":"var(--red)"}}>{m.rrRatio.toFixed(2)} : 1</span>
+                </div>
+                <div style={{display:"flex",gap:20,fontSize:13,color:"var(--muted)"}}>
                   <span>Avg win <span style={{color:"var(--green)"}}>{fmtShort(m.avgWin)}</span></span>
                   <span>Avg loss <span style={{color:"var(--red)"}}>{fmtShort(-m.avgLoss)}</span></span>
                 </div>
               </div>
             )}
-            <div style={C.card}><span style={C.lbl}>Curva de equity</span><EquityCurve data={m?.equityCurve}/></div>
+
+            {/* Equity curve */}
+            <div style={C.card}>
+              <span style={C.lbl}>Curva de equity</span>
+              <EquityCurve data={m?.equityCurve}/>
+            </div>
+
+            {/* Days grid */}
+            <DaysGrid sessions={sessions}/>
+
+            {/* Contratos mensual */}
+            <ContratosBar
+              actual={m?.contratosThisMonth||0}
+              objetivo={OBJ_MENSUAL}
+              label={`Contratos este mes (${m?.currentMonth||new Date().toISOString().slice(0,7)})`}
+              sub={`Objetivo mensual: ${OBJ_MENSUAL.toLocaleString()} contratos`}
+            />
+
+            {/* Contratos semanal */}
+            <WeeklyContratos actual={m?.contratosThisWeek||0}/>
+
+            {/* Month grid */}
             <MonthGrid months={m?.months} count={m?.greenMonthsCount||1}/>
+
+            {/* Reglas */}
             <div style={C.card}>
               <span style={C.lbl}>Reglas · No negociables</span>
-              <div style={{display:"flex",flexDirection:"column",gap:8}}>
-                {[{k:"Alerta",v:"−$20.000",c:"var(--yellow)"},{k:"Cierre total",v:"−$40.000",c:"var(--red)"},{k:"Corte anticipado",v:"65 contratos / +$20.000",c:"var(--green)"},{k:"Horario",v:"10:30 → 13:00",c:"var(--indigo)"},{k:"Objetivo diario",v:"+$10.000",c:"var(--green)"}].map(r=>(
-                  <div key={r.k} style={{display:"flex",justifyContent:"space-between"}}><span style={{fontSize:12,color:"var(--muted)"}}>{r.k}</span><span style={{fontSize:12,fontWeight:700,color:r.c}}>{r.v}</span></div>
+              <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                {[
+                  {k:"Alerta",v:"−$20.000",c:"var(--yellow)"},
+                  {k:"Cierre total",v:"−$40.000",c:"var(--red)"},
+                  {k:"Corte anticipado",v:"65 contratos / +$20.000",c:"var(--green)"},
+                  {k:"Horario",v:"10:30 → 13:00",c:"var(--indigo)"},
+                  {k:"Objetivo diario",v:"+$10.000",c:"var(--green)"},
+                ].map(r=>(
+                  <div key={r.k} style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                    <span style={{fontSize:13,color:"var(--muted)"}}>{r.k}</span>
+                    <span style={{fontSize:13,fontWeight:700,color:r.c}}>{r.v}</span>
+                  </div>
                 ))}
               </div>
             </div>
           </div>
         )}
+
         {view==="nueva"&&<NewSession onSave={addSession}/>}
+
         {view==="sesiones"&&(
-          <div style={{display:"flex",flexDirection:"column",gap:10}} className="fi">
+          <div style={{display:"flex",flexDirection:"column",gap:12}} className="fi">
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               <span style={{...C.lbl,marginBottom:0}}>{daily.length} sesiones registradas</span>
-              {m&&<span style={{fontSize:13,fontWeight:700,color:m.totalPnl>=0?"var(--green)":"var(--red)"}}>{fmtFull(m.totalPnl)}</span>}
+              {m&&<span style={{fontSize:14,fontWeight:700,color:m.totalPnl>=0?"var(--green)":"var(--red)"}}>{fmtFull(m.totalPnl)}</span>}
             </div>
             {daily.length===0&&(
               <div style={{textAlign:"center",padding:"48px 0"}}>
-                <div style={{fontSize:32,marginBottom:8}}>◈</div>
-                <p style={{fontSize:12,color:"var(--muted)",marginBottom:16}}>Sin sesiones diarias aún.</p>
-                <button onClick={()=>setView("nueva")} style={{...C.btn,width:"auto",padding:"8px 20px",background:"var(--indigo)",color:"white"}}>Cargar primera sesión →</button>
+                <div style={{fontSize:36,marginBottom:10}}>◈</div>
+                <p style={{fontSize:13,color:"var(--muted)",marginBottom:18}}>Sin sesiones diarias aún.</p>
+                <button onClick={()=>setView("nueva")} style={{...C.btn,width:"auto",padding:"10px 24px",background:"var(--indigo)",color:"white"}}>Cargar primera sesión →</button>
               </div>
             )}
             {daily.map(s=><SessionCard key={s.id} s={s} onDelete={deleteSession}/>)}
           </div>
         )}
+
         {view==="mensual"&&<MonthlyView sessions={sessions}/>}
+        {view==="backup"&&<BackupView sessions={sessions} onImport={importSessions}/>}
       </main>
     </div>
   );
