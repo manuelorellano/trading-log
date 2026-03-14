@@ -496,6 +496,48 @@ function BackupView({sessions,onImport}) {
   );
 }
 
+// ── Next Review ───────────────────────────────────────────────────────────────
+function getNextReview() {
+  // Anchor: Monday 30/03/2026. Every 2 weeks from there.
+  const anchor = new Date("2026-03-30");
+  const today = new Date();
+  today.setHours(0,0,0,0);
+  if(today <= anchor) return anchor;
+  const diff = today - anchor;
+  const weeks = Math.floor(diff / (14 * 86400000));
+  const next = new Date(anchor);
+  next.setDate(anchor.getDate() + (weeks + 1) * 14);
+  return next;
+}
+
+function NextReview() {
+  const next = getNextReview();
+  const today = new Date(); today.setHours(0,0,0,0);
+  const diffDays = Math.round((next - today) / 86400000);
+  const isToday = diffDays === 0;
+  const isSoon = diffDays <= 3 && diffDays > 0;
+  const dateStr = next.toLocaleDateString("es-AR", {day:"2-digit", month:"2-digit", year:"numeric"});
+  const color = isToday ? "var(--green)" : isSoon ? "var(--yellow)" : "var(--indigo)";
+  const borderColor = isToday ? "var(--green-border)" : isSoon ? "#92400e" : "var(--border)";
+  const bg = isToday ? "var(--green-bg)" : isSoon ? "var(--yellow-bg)" : "var(--surface)";
+
+  return (
+    <div style={{...C.card, background:bg, borderColor, position:"relative", overflow:"hidden"}}>
+      <div style={{position:"absolute",top:0,left:0,right:0,height:1,background:`linear-gradient(90deg,transparent,${color},transparent)`}}/>
+      <span style={C.lbl}>Próxima revisión quincenal</span>
+      <div style={{fontSize:24,fontWeight:700,color,marginBottom:6}}>{dateStr}</div>
+      <div style={{fontSize:12,color:"var(--muted)"}}>
+        {isToday
+          ? <span style={{color:"var(--green)",fontWeight:700}}>📋 Hoy es día de revisión</span>
+          : isSoon
+          ? <span style={{color:"var(--yellow)"}}>⚡ En {diffDays} días</span>
+          : <span>En {diffDays} días · cada 2 lunes</span>
+        }
+      </div>
+    </div>
+  );
+}
+
 // ── App ───────────────────────────────────────────────────────────────────────
 function App() {
   const [sessions,setSessions]=useState(()=>sGet()||[FEB_REF]);
@@ -574,25 +616,28 @@ function App() {
               </div>
             </div>
 
-            {/* Row 4 — Month grid + Reglas */}
+            {/* Row 4 — Month grid + Reglas + Revisión */}
             <div style={{display:"grid",gridTemplateColumns:"1.6fr 1fr",gap:14}}>
               <MonthGrid months={m?.months} count={m?.greenMonthsCount||1}/>
-              <div style={C.card}>
-                <span style={C.lbl}>Reglas · No negociables</span>
-                <div style={{display:"flex",flexDirection:"column",gap:10}}>
-                  {[
-                    {k:"Alerta",v:"−$20.000",c:"var(--yellow)"},
-                    {k:"Cierre total",v:"−$40.000",c:"var(--red)"},
-                    {k:"Corte anticipado",v:"65c / +$20k",c:"var(--green)"},
-                    {k:"Horario",v:"10:30 → 13:00",c:"var(--indigo)"},
-                    {k:"Objetivo diario",v:"+$10.000",c:"var(--green)"},
-                  ].map(r=>(
-                    <div key={r.k} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:"1px solid var(--border)"}}>
-                      <span style={{fontSize:12,color:"var(--muted)"}}>{r.k}</span>
-                      <span style={{fontSize:13,fontWeight:700,color:r.c}}>{r.v}</span>
-                    </div>
-                  ))}
+              <div style={{display:"flex",flexDirection:"column",gap:14}}>
+                <div style={C.card}>
+                  <span style={C.lbl}>Reglas · No negociables</span>
+                  <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                    {[
+                      {k:"Alerta",v:"−$20.000",c:"var(--yellow)"},
+                      {k:"Cierre total",v:"−$40.000",c:"var(--red)"},
+                      {k:"Corte anticipado",v:"65c / +$20k",c:"var(--green)"},
+                      {k:"Horario",v:"10:30 → 13:00",c:"var(--indigo)"},
+                      {k:"Objetivo diario",v:"+$10.000",c:"var(--green)"},
+                    ].map(r=>(
+                      <div key={r.k} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:"1px solid var(--border)"}}>
+                        <span style={{fontSize:12,color:"var(--muted)"}}>{r.k}</span>
+                        <span style={{fontSize:13,fontWeight:700,color:r.c}}>{r.v}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
+                <NextReview/>
               </div>
             </div>
 
